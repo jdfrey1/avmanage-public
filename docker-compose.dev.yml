@@ -1,0 +1,72 @@
+name: avmanage
+
+# =============================================================================
+# Local development stack — builds the image from source.
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up --build
+#   docker compose -f docker-compose.dev.yml down
+#
+# Data lives in named volumes (db_data, uploads) scoped to this compose project.
+# Use `docker volume ls` to inspect them.
+# =============================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: avmanage:dev
+    container_name: avmanage-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3022
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      SESSION_SECRET: ${SESSION_SECRET}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      UPLOADS_DIR: /data/uploads
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FLIGHTAWARE_API_KEY: ${FLIGHTAWARE_API_KEY:-}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      APP_TIMEZONE: ${APP_TIMEZONE:-America/New_York}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-}
+    volumes:
+      - uploads:/data/uploads
+      - ./db/backups:/data/backups
+    ports:
+      - "127.0.0.1:3022:3022"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3022/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  db:
+    image: postgres:16-alpine
+    container_name: avmanage-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  db_data:
+    driver: local
+  uploads:
+    driver: local

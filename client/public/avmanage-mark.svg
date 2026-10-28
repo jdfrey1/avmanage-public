@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 630" role="img" aria-label="avManage">
+  <rect width="900" height="630" fill="#eef1f5"/>
+  <g fill="none" stroke-linejoin="round">
+    <polygon points="450,70 640,180 640,400 450,510 260,400 260,180" stroke="#7d97b8" stroke-width="14"/>
+    <polygon points="450,105 610,197 610,383 450,475 290,383 290,197" stroke="#c9a961" stroke-width="8"/>
+  </g>
+  <!-- simple low-wing single, top view -->
+  <g fill="#4d6a8f" transform="translate(450 290) rotate(-30)">
+    <path d="M-12,-150 C-12,-172 12,-172 12,-150 L14,-40 L190,-6 L190,18 L14,10 L10,110 L62,128 L62,146 L0,140 L-62,146 L-62,128 L-10,110 L-14,10 L-190,18 L-190,-6 L-14,-40 Z"/>
+  </g>
+  <text x="450" y="600" text-anchor="middle" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="600" fill="#2f4561">avManage</text>
+</svg>

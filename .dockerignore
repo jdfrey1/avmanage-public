@@ -1,0 +1,22 @@
+**/.git
+**/.gitignore
+**/node_modules
+**/.env
+**/.env.*
+**/npm-debug.log*
+
+# Client build artifacts (built fresh inside Docker)
+client/dist
+
+# App static dir (rebuilt from client stage)
+app/public/assets
+
+# Local uploaded files and backups (live data — never bake into image)
+app/uploads
+db/backups
+
+# Dev/docs
+samples
+*.sh
+*.md
+PROJECT_NOTES*

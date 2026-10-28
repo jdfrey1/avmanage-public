@@ -1,0 +1,2 @@
+# Private installation files — left out of `git archive`, which scripts/publish-public.sh uses.
+instance/ export-ignore
