@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Camera, Paperclip, Plus, X, RefreshCw, Download, FileText } from 'lucide-react'
 import { api, logbookApi, type Squawk, type MaintenanceEntry, type MaintenanceRecurring, type MaintenanceInterval, type InspectionItem, type CostAnalysis, type MaintenanceAttachment, type LogbookEntry, type LogbookDocument, type LogbookCategory, type LogbookCitation } from '@/lib/api'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { Input, openPicker } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
@@ -827,6 +827,7 @@ function InspectionsSection() {
                   type="date"
                   defaultValue={i.due_date ?? ''}
                   key={i.due_date ?? 'none'}
+                  onClick={openPicker}
                   onBlur={e => { if (e.target.value !== (i.due_date ?? '')) setDueDate(i.id, e.target.value) }}
                   className="rounded-md border border-input bg-background px-2 py-1 text-xs"
                 />

@@ -108,7 +108,7 @@ async function runMonthlyReport(overrideRecipients = null) {
   if (toEmails.length === 0) return;
 
   const { rows: [p] } = await pool.query('SELECT aircraft_tail FROM partnerships WHERE id = $1', [partnershipId]);
-  const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const { month_label: monthLabel } = await reports.getReportPeriod();
   const html = await reports.buildMonthlyReportHtml(partnershipId);
   await googleMail.sendMail({
     to: toEmails,

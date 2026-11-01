@@ -261,14 +261,13 @@ export function LogFlight() {
                 className="flex items-center gap-1 rounded-md p-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
               >
                 <Camera className="h-3.5 w-3.5" />
-                {ocrLoading ? 'Reading…' : 'Snap photo'}
+                {ocrLoading ? 'Reading…' : 'Import Photo'}
               </button>
             )}
             <input
               ref={photoInputRef}
               type="file"
               accept="image/*"
-              capture="environment"
               className="hidden"
               onChange={handlePhotoSelect}
             />

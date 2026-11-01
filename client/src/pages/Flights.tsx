@@ -281,7 +281,15 @@ function FlightCard({ flight: f, isSelf, showDate }: { flight: Flight; isSelf: b
       )}
       <div className="flex items-start justify-between gap-2">
         <div className="space-y-0.5">
-          <p className="tabular-nums text-sm font-semibold">
+          {hobbsTime && (
+            <p className="tabular-nums text-sm font-semibold">
+              {hobbsTime} Flight hrs
+              <span className="ml-1.5 font-normal text-muted-foreground">
+                ({parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)})
+              </span>
+            </p>
+          )}
+          <p className={`tabular-nums text-sm ${hobbsTime ? '' : 'font-semibold'}`}>
             {tachTime} Hobbs hrs
             <span className="ml-1.5 font-normal text-muted-foreground">
               ({parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)})
@@ -290,14 +298,6 @@ function FlightCard({ flight: f, isSelf, showDate }: { flight: Flight; isSelf: b
               <Camera className="ml-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
             )}
           </p>
-          {hobbsTime && (
-            <p className="tabular-nums text-sm">
-              {hobbsTime} Flight hrs
-              <span className="ml-1.5 text-muted-foreground">
-                ({parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)})
-              </span>
-            </p>
-          )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {f.exclude_from_allotment && <Badge variant="outline">Excluded</Badge>}

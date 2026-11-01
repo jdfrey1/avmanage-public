@@ -215,16 +215,15 @@ async function getHoursSummary(userId, partnershipId) {
 
 // Flights logged by a pilot within the current calendar month, for the monthly report's
 // per-pilot flight list.
-async function getMonthlyFlights(userId, partnershipId) {
+async function getMonthlyFlights(userId, partnershipId, period) {
   const { rows } = await pool.query(`
     SELECT TO_CHAR(flight_date, 'YYYY-MM-DD') AS flight_date, route, flight_time, exclude_from_allotment, notes
     FROM flights
     WHERE pilot_id = $1
       AND partnership_id = $2
-      AND flight_date >= DATE_TRUNC('month', CURRENT_DATE)
-      AND flight_date < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'
+      AND flight_date >= $3 AND flight_date < $4
     ORDER BY flight_date ASC
-  `, [userId, partnershipId]);
+  `, [userId, partnershipId, period.month_start, period.month_end]);
   return rows;
 }
 
@@ -270,6 +269,66 @@ async function getMaintenanceCostSummary(partnershipId, year = new Date().getFul
     ORDER BY total DESC
   `, [partnershipId, year]);
   return rows;
+}
+
+// The monthly report covers the last complete month.
+async function getReportPeriod() {
+  const { rows: [period] } = await pool.query(`
+    SELECT TO_CHAR(m, 'YYYY-MM-DD') AS month_start,
+           TO_CHAR(m + INTERVAL '1 month', 'YYYY-MM-DD') AS month_end,
+           TO_CHAR(DATE_TRUNC('year', m), 'YYYY-MM-DD') AS year_start,
+           TO_CHAR(m + INTERVAL '1 month' - INTERVAL '1 day', 'FMMon FMDD') AS last_day_label,
+           TO_CHAR(m, 'FMMonth YYYY') AS month_label,
+           EXTRACT(YEAR FROM m)::int AS year
+    FROM (SELECT DATE_TRUNC('month', CURRENT_DATE - INTERVAL '1 month') AS m) x
+  `);
+  return period;
+}
+
+// What the aircraft cost, from the ledger: the report month per category, and the year's total
+// through that month. Lease and excess-hour charges are between members, not aircraft costs,
+// so only these categories count. Credits (refunds) reduce a category.
+const COST_CATEGORIES = {
+  annual: 'Annual',
+  maintenance: 'Maintenance',
+  insurance: 'Insurance',
+  hangar: 'Hangar',
+  subscriptions: 'Subscriptions',
+  capital: 'Capital',
+  one_time_fuel: 'Fuel',
+  tks: 'TKS',
+  oil: 'Oil',
+};
+
+async function getCostSummary(partnershipId, period) {
+  const { rows } = await pool.query(`
+    SELECT entry_type,
+           COALESCE(SUM(CASE WHEN effective_date >= $3 THEN signed END), 0)::float AS month_total,
+           SUM(signed)::float AS ytd_total
+    FROM (
+      SELECT entry_type, effective_date,
+             CASE WHEN direction = 'debit' THEN amount ELSE -amount END AS signed
+      FROM financial_ledger
+      WHERE partnership_id = $1 AND entry_type = ANY($2)
+        AND effective_date >= $4 AND effective_date < $5
+    ) e
+    GROUP BY entry_type
+    ORDER BY month_total DESC
+  `, [partnershipId, Object.keys(COST_CATEGORIES), period.month_start, period.year_start, period.month_end]);
+  const { rows: entries } = await pool.query(`
+    SELECT TO_CHAR(effective_date, 'FMMon FMDD') AS date, entry_type, description,
+           (CASE WHEN direction = 'debit' THEN amount ELSE -amount END)::float AS amount
+    FROM financial_ledger
+    WHERE partnership_id = $1 AND entry_type = ANY($2)
+      AND effective_date >= $3 AND effective_date < $4
+    ORDER BY effective_date, created_at
+  `, [partnershipId, Object.keys(COST_CATEGORIES), period.month_start, period.month_end]);
+  return {
+    entries: entries.map(e => ({ ...e, category: COST_CATEGORIES[e.entry_type] })),
+    rows: rows.filter(r => r.month_total !== 0).map(r => ({ category: COST_CATEGORIES[r.entry_type], total: r.month_total })),
+    month_total: rows.reduce((t, r) => t + r.month_total, 0),
+    ytd_total: rows.reduce((t, r) => t + r.ytd_total, 0),
+  };
 }
 
 // Calendar-date-due recurring maintenance items, soonest first. There's no hours-based due
@@ -359,12 +418,13 @@ async function getOpenSquawks(partnershipId) {
   return rows;
 }
 
-async function getLedgerBalance(partnershipId, userId) {
+async function getLedgerBalance(partnershipId, userId, before = null) {
   const { rows: [row] } = await pool.query(`
     SELECT COALESCE(SUM(CASE WHEN direction = 'credit' THEN amount ELSE -amount END), 0)::float AS balance
     FROM financial_ledger
     WHERE partnership_id = $1 AND lessee_id = $2
-  `, [partnershipId, userId]);
+      AND ($3::date IS NULL OR effective_date < $3::date)
+  `, [partnershipId, userId, before]);
   return row.balance;
 }
 
@@ -378,9 +438,9 @@ function currencyRow(label, status) {
   return `<tr><td style="padding:4px 12px 4px 0;">${label}</td><td style="padding:4px 0;">${state}</td></tr>`;
 }
 
-function flightsList(flights) {
+function flightsList(flights, monthLabel) {
   if (flights.length === 0) {
-    return '<p style="font-size:14px;margin:8px 0 0;color:#666;">No flights logged this month.</p>';
+    return `<p style="font-size:14px;margin:8px 0 0;color:#666;">No flights logged in ${monthLabel}.</p>`;
   }
   const rows = flights.map(f => `
     <tr>
@@ -403,9 +463,9 @@ async function buildMonthlyReportHtml(partnershipId) {
     [partnershipId]
   );
 
-  const year = new Date().getFullYear();
-  const [costSummary, upcoming, openSquawks, hourIntervals, inspections] = await Promise.all([
-    getMaintenanceCostSummary(partnershipId, year),
+  const period = await getReportPeriod();
+  const [costs, upcoming, openSquawks, hourIntervals, inspections] = await Promise.all([
+    getCostSummary(partnershipId, period),
     getUpcomingMaintenance(partnershipId),
     getOpenSquawks(partnershipId),
     getHourIntervals(partnershipId),
@@ -417,8 +477,8 @@ async function buildMonthlyReportHtml(partnershipId) {
     const [currency, hours, balance, flights] = await Promise.all([
       getCurrencyStatus(m.id),
       getHoursSummary(m.id, partnershipId),
-      getLedgerBalance(partnershipId, m.id),
-      getMonthlyFlights(m.id, partnershipId),
+      getLedgerBalance(partnershipId, m.id, period.month_end),
+      getMonthlyFlights(m.id, partnershipId, period),
     ]);
     const hoursLine = isOwner
       ? `Hours flown (${hours.period}): <strong>${hours.hours_flown.toFixed(1)}</strong>`
@@ -439,16 +499,22 @@ async function buildMonthlyReportHtml(partnershipId) {
       </table>
       <p style="font-size:14px;margin:12px 0 0;">${hoursLine}</p>
       ${isOwner
-        ? (balance !== 0 ? `<p style="font-size:14px;margin:4px 0 0;">Total expenses: <strong>${fmtMoney(-balance)}</strong></p>` : '')
-        : `<p style="font-size:14px;margin:4px 0 0;">Ledger balance: <strong>${fmtMoney(balance)}</strong> ${balance < 0 ? '(owed to partnership)' : ''}</p>`}
-      <p style="font-size:13px;margin:16px 0 0;color:#666;">Flights this month</p>
-      ${flightsList(flights)}`;
+        ? (balance !== 0 ? `<p style="font-size:14px;margin:4px 0 0;">Total expenses through ${period.last_day_label}: <strong>${fmtMoney(-balance)}</strong></p>` : '')
+        : `<p style="font-size:14px;margin:4px 0 0;">Ledger balance on ${period.last_day_label}: <strong>${fmtMoney(balance)}</strong> ${balance < 0 ? '(owed to partnership)' : ''}</p>`}
+      <p style="font-size:13px;margin:16px 0 0;color:#666;">Flights in ${period.month_label}</p>
+      ${flightsList(flights, period.month_label)}`;
   }));
 
-  const costTotal = costSummary.reduce((s, r) => s + r.total, 0);
-  const costRows = costSummary.length
-    ? costSummary.map(r => `<tr><td style="padding:4px 12px 4px 0;">${r.category}</td><td style="padding:4px 0;">${fmtMoney(r.total)}</td></tr>`).join('')
-    : '<tr><td style="padding:4px 0;" colspan="2">No maintenance costs logged this year.</td></tr>';
+  const costCell = 'padding:4px 0 4px 16px;text-align:right;';
+  const costRows = costs.rows.length
+    ? costs.rows.map(r => `<tr><td style="padding:4px 12px 4px 0;">${r.category}</td><td style="${costCell}">${fmtMoney(r.total)}</td></tr>`).join('')
+      + `<tr style="font-weight:bold;border-top:1px solid #ccc;"><td style="padding:4px 12px 4px 0;">Total</td><td style="${costCell}">${fmtMoney(costs.month_total)}</td></tr>`
+    : `<tr><td style="padding:4px 0;" colspan="2">No costs recorded in ${period.month_label}.</td></tr>`;
+
+  const costDetails = costs.entries.length
+    ? `<p style="font-size:13px;margin:16px 0 4px;color:#666;">Details</p>
+      <table style="border-collapse:collapse;font-size:14px;">${costs.entries.map(e => `<tr><td style="padding:4px 12px 4px 0;white-space:nowrap;vertical-align:top;">${e.date}</td><td style="padding:4px 12px 4px 0;vertical-align:top;">${e.description}</td><td style="padding:4px 12px 4px 0;vertical-align:top;color:#666;">${e.category}</td><td style="padding:4px 0;text-align:right;vertical-align:top;">${e.amount < 0 ? `−${fmtMoney(-e.amount)}` : fmtMoney(e.amount)}</td></tr>`).join('')}</table>`
+    : '';
 
   const upcomingRows = upcoming.length
     ? upcoming.map(u => `<tr><td style="padding:4px 12px 4px 0;">${u.title}</td><td style="padding:4px 12px 4px 0;">${u.next_due_date}</td><td style="padding:4px 0;">${fmtMoney(parseFloat(u.cost_amount))}</td></tr>`).join('')
@@ -481,13 +547,14 @@ async function buildMonthlyReportHtml(partnershipId) {
   return `
     <div style="font-family:sans-serif;color:#1a1a1a;max-width:640px;">
       <h2 style="margin:0 0 4px;">${tail} — Monthly Report</h2>
-      <p style="color:#666;margin:0 0 16px;">${new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</p>
+      <p style="color:#666;margin:0 0 16px;">${period.month_label}</p>
 
       ${pilotSections.join('')}
 
-      <h3 style="margin:28px 0 8px;">Maintenance costs (${year} YTD)</h3>
+      <h3 style="margin:28px 0 8px;">Costs — ${period.month_label}</h3>
       <table style="border-collapse:collapse;font-size:14px;">${costRows}</table>
-      <p style="font-size:14px;margin:8px 0 0;">Total: <strong>${fmtMoney(costTotal)}</strong></p>
+      <p style="font-size:14px;margin:8px 0 0;">${period.year} year to date: <strong>${fmtMoney(costs.ytd_total)}</strong></p>
+      ${costDetails}
 
       <h3 style="margin:28px 0 8px;">Upcoming maintenance</h3>
       <table style="border-collapse:collapse;font-size:14px;">${upcomingRows}</table>
@@ -508,6 +575,8 @@ module.exports = {
   getHoursSummary,
   getMemberUsage,
   getMaintenanceCostSummary,
+  getReportPeriod,
+  getCostSummary,
   getUpcomingMaintenance,
   getCurrentFlightHours,
   getHourIntervals,

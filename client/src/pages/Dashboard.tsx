@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Clock, DollarSign, Plane, AlertTriangle, CalendarDays, ShieldCheck, ShieldAlert, Plus, Download } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -51,6 +51,7 @@ export function Dashboard() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const importRef = useRef<HTMLInputElement>(null)
+  const currencyRequest = useRef(0)
   const [currency, setCurrency] = useState<CurrencyStatus | null>(null)
   const [partnership, setPartnership] = useState<Partnership | null>(null)
   const [squawks, setSquawks] = useState<Squawk[]>([])
@@ -75,7 +76,6 @@ export function Dashboard() {
 
   useEffect(() => {
     api.get<Partnership>('/partnership').then(setPartnership).catch(() => {})
-    api.get<CurrencyStatus>('/currency').then(setCurrency).catch(() => {})
 
     api.get<Flight[]>('/flights?limit=1')
       .then(([f]) => f && setLastFlight(f))
@@ -107,6 +107,17 @@ export function Dashboard() {
       .catch(() => setAnnualHours(null))
   }, [hoursMemberId])
 
+  const loadCurrency = useCallback((memberId: string) => {
+    const seq = ++currencyRequest.current
+    api.get<CurrencyStatus>(`/currency?user_id=${memberId}`)
+      .then(status => { if (seq === currencyRequest.current) setCurrency(status) })
+      .catch(() => { if (seq === currencyRequest.current) setCurrency(null) })
+  }, [])
+
+  useEffect(() => {
+    if (hoursMemberId) loadCurrency(hoursMemberId)
+  }, [hoursMemberId, loadCurrency])
+
   async function handleDashboardImport(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -114,7 +125,7 @@ export function Dashboard() {
       const fd = new FormData()
       fd.append('logbook', file)
       await api.upload<{ imported: number; last_import_at: string }>('/currency/import', fd)
-      api.get<CurrencyStatus>('/currency').then(setCurrency).catch(() => {})
+      if (hoursMemberId) loadCurrency(hoursMemberId)
     } catch { /* silent — settings page shows errors */ }
     finally { if (importRef.current) importRef.current.value = '' }
   }
@@ -125,7 +136,7 @@ export function Dashboard() {
       {/* Header */}
       <div className="pt-2 flex items-start justify-between">
         <div>
-          <p className="text-xs text-muted-foreground">{timeGreeting()}{currency?.pilot ? `, ${currency.pilot.split(' ')[0]}` : ''}</p>
+          <p className="text-xs text-muted-foreground">{timeGreeting()}{user?.name ? `, ${user.name.split(' ')[0]}` : ''}</p>
           <button
             type="button"
             onClick={() => navigate('/documents')}
@@ -212,21 +223,7 @@ export function Dashboard() {
               <CardTitle className="flex items-center gap-1 text-xs">
                 <Clock className="h-3 w-3" /> Used Hours
               </CardTitle>
-              <div className="flex gap-1">
-                {upcomingMembers.map(m => (
-                  <button
-                    key={m.user_id}
-                    type="button"
-                    onClick={() => setHoursUserId(m.user_id)}
-                    className={cn(
-                      'rounded px-1 text-[10px] leading-tight',
-                      m.user_id === hoursMemberId ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
-                    )}
-                  >
-                    {m.name.split(' ')[0]}
-                  </button>
-                ))}
-              </div>
+              <MemberSwitcher members={upcomingMembers} selectedId={hoursMemberId} onSelect={setHoursUserId} />
             </div>
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0">
@@ -342,13 +339,18 @@ export function Dashboard() {
           <CardTitle className="flex items-center gap-1.5">
             <ShieldCheck className="h-3.5 w-3.5" /> Currency{currency?.pilot ? ` — ${currency.pilot}` : ''}
           </CardTitle>
-          <button
-            onClick={() => importRef.current?.click()}
-            className="rounded-md p-1 text-muted-foreground hover:text-foreground"
-            title="Import ForeFlight CSV"
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            <MemberSwitcher members={upcomingMembers} selectedId={hoursMemberId} onSelect={setHoursUserId} />
+            {hoursMemberId === user?.id && (
+              <button
+                onClick={() => importRef.current?.click()}
+                className="rounded-md p-1 text-muted-foreground hover:text-foreground"
+                title="Import ForeFlight CSV"
+              >
+                <Download className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           <input ref={importRef} type="file" accept=".csv" className="hidden" onChange={handleDashboardImport} />
         </CardHeader>
         <CardContent className="space-y-2">
@@ -401,6 +403,26 @@ export function Dashboard() {
           )}
         </CardContent>
       </Card>
+    </div>
+  )
+}
+
+function MemberSwitcher({ members, selectedId, onSelect }: { members: PartnershipMember[]; selectedId: string | null; onSelect: (id: string) => void }) {
+  return (
+    <div className="flex gap-1">
+      {members.map(m => (
+        <button
+          key={m.user_id}
+          type="button"
+          onClick={() => onSelect(m.user_id)}
+          className={cn(
+            'rounded px-1 text-[10px] leading-tight',
+            m.user_id === selectedId ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {m.name.split(' ')[0]}
+        </button>
+      ))}
     </div>
   )
 }

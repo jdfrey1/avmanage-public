@@ -1,6 +1,11 @@
 import { cn } from '@/lib/utils'
 
-export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
+// Browsers only open the calendar from the small icon; this opens it from anywhere in the field.
+export function openPicker(e: React.MouseEvent<HTMLInputElement>) {
+  try { e.currentTarget.showPicker() } catch { /* unsupported or disabled */ }
+}
+
+export function Input({ className, onClick, ...props }: React.InputHTMLAttributes<HTMLInputElement>) {
   return (
     <input
       className={cn(
@@ -10,6 +15,10 @@ export function Input({ className, ...props }: React.InputHTMLAttributes<HTMLInp
         'disabled:cursor-not-allowed disabled:opacity-50',
         className
       )}
+      onClick={e => {
+        if (props.type === 'date' || props.type === 'datetime-local') openPicker(e)
+        onClick?.(e)
+      }}
       {...props}
     />
   )

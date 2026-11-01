@@ -242,7 +242,15 @@ router.post('/import', upload.single('logbook'), async (req, res) => {
 // GET /api/currency
 router.get('/', async (req, res) => {
   try {
-    const status = await reports.getCurrencyStatus(req.session.userId);
+    let userId = req.session.userId;
+    if (req.query.user_id && req.query.user_id !== userId) {
+      const { partnership_id: partnershipId } = await getMembership(userId);
+      const { rows: [m] } = await pool.query(
+        'SELECT 1 FROM partnership_members WHERE user_id = $1 AND partnership_id = $2', [req.query.user_id, partnershipId]);
+      if (!m) return res.status(404).json({ error: 'Member not found' });
+      userId = req.query.user_id;
+    }
+    const status = await reports.getCurrencyStatus(userId);
     res.json(status);
   } catch (err) {
     console.error('Currency GET error:', err);

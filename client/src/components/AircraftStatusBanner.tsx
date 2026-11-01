@@ -22,7 +22,7 @@ export function AircraftStatusBanner({ status }: { status: AircraftStatus | null
     ? Math.round((Date.parse(status.insurance_expires_date) - Date.parse(today)) / 86400000) : null
   const lines: { tone: 'red' | 'amber'; text: string }[] = []
   if (status.grounded) {
-    lines.push({ tone: 'red', text: `Grounded — open major squawk: ${status.major_squawks[0].description.slice(0, 90)}${status.major_squawks.length > 1 ? ` (+${status.major_squawks.length - 1} more)` : ''}` })
+    lines.push({ tone: 'red', text: `Grounded — open major squawk: ${status.major_squawks[0].description}${status.major_squawks.length > 1 ? ` (+${status.major_squawks.length - 1} more)` : ''}` })
   }
   for (const i of status.overdue) lines.push({ tone: 'red', text: `Overdue: ${i.title} (was due ${fmt(i.due_date!)})` })
   for (const i of status.due_soon) lines.push({ tone: 'amber', text: `Due soon: ${i.title} (${fmt(i.due_date!)}, ${i.days_until} days)` })
