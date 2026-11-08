@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Select } from '@/components/ui/select'
 import { api, type MemberUsage } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
@@ -47,11 +48,11 @@ function AddMember({ onAdded }: { onAdded: () => void }) {
           </div>
           <div className="space-y-1.5">
             <Label>Role</Label>
-            <select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as 'owner' | 'lessee' }))}
+            <Select value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value as 'owner' | 'lessee' }))}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
               <option value="lessee">Lessee / partner</option>
               <option value="owner">Owner (replaces the current owner)</option>
-            </select>
+            </Select>
           </div>
           {error && <p className="text-xs text-destructive">{error}</p>}
           <div className="flex gap-2">
@@ -188,7 +189,7 @@ export function MembersManager() {
               {m.is_admin && (
                 <span className="rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">Admin</span>
               )}
-              <select
+              <Select
                 value={m.role}
                 onChange={e => patchMember(m, { role: e.target.value })}
                 className="rounded-md border border-input bg-background px-2 py-1 text-xs"
@@ -196,7 +197,7 @@ export function MembersManager() {
               >
                 <option value="owner">Owner</option>
                 <option value="lessee">Lessee</option>
-              </select>
+              </Select>
             </div>
           </div>
           <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
@@ -259,14 +260,14 @@ export function MembersManager() {
                 </div>
                 <div className="w-28 space-y-1.5">
                   <Label>Period</Label>
-                  <select
+                  <Select
                     value={periods[m.id] ?? 'annual'}
                     onChange={e => setPeriods(p => ({ ...p, [m.id]: e.target.value as 'annual' | 'monthly' }))}
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                   >
                     <option value="annual">Annual</option>
                     <option value="monthly">Monthly</option>
-                  </select>
+                  </Select>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-2">

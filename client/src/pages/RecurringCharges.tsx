@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronLeft, Plus, RefreshCw } from 'lucide-react'
 import { api, type RecurringCharge, type PartnershipMember } from '@/lib/api'
@@ -200,13 +201,13 @@ export function RecurringCharges() {
         {lessees.length > 1 && (
           <div className="space-y-1">
             <p className="text-xs text-muted-foreground">Viewing for:</p>
-            <select
+            <Select
               value={selectedLesseeId}
               onChange={e => setLesseeId(e.target.value)}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
             >
               {lessees.map(l => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+            </Select>
           </div>
         )}
 
@@ -217,7 +218,7 @@ export function RecurringCharges() {
 
             <div className="space-y-1.5">
               <Label>Type</Label>
-              <select
+              <Select
                 value={entryType}
                 onChange={e => handleTypeChange(e.target.value)}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -225,7 +226,7 @@ export function RecurringCharges() {
                 {typeOptions.map(([key, { label }]) => (
                   <option key={key} value={key}>{label}</option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div className="space-y-1.5">
@@ -302,7 +303,7 @@ export function RecurringCharges() {
 
                   <div className="space-y-1.5">
                     <Label>Type</Label>
-                    <select
+                    <Select
                       value={editState.entry_type}
                       onChange={e => setEditState(s => s && ({ ...s, entry_type: e.target.value }))}
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -310,7 +311,7 @@ export function RecurringCharges() {
                       {typeOptions.map(([key, { label }]) => (
                         <option key={key} value={key}>{label}</option>
                       ))}
-                    </select>
+                    </Select>
                   </div>
 
                   <div className="space-y-1.5">

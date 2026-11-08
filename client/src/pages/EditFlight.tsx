@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { PilotPicker } from '@/components/PilotPicker'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronLeft, Trash2, Camera } from 'lucide-react'
 import { api, type Flight, type TachOcrResult, type PartnershipMember } from '@/lib/api'
@@ -6,6 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { shrinkImage } from '@/lib/image'
+import { GarminUploadButton } from '@/components/GarminData'
 
 const TABS_GALLONS = '60'
 const FULL_GALLONS = '92'
@@ -16,6 +19,7 @@ export function EditFlight() {
 
   const [members, setMembers] = useState<PartnershipMember[]>([])
   const [pilotId, setPilotId] = useState('')
+  const [otherPilot, setOtherPilot] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [flightDate, setFlightDate] = useState('')
@@ -63,6 +67,7 @@ export function EditFlight() {
         setExcludeFromAllotment(f.exclude_from_allotment)
         setExistingPhotoKey(f.ocr_source_image_key)
         setPilotId(f.pilot_id)
+        setOtherPilot(f.other_pilot)
       })
       .catch(err => {
         if (err.status === 404) setNotFound(true)
@@ -79,7 +84,7 @@ export function EditFlight() {
     setOcrResult(null)
     try {
       const fd = new FormData()
-      fd.append('photo', file)
+      fd.append('photo', await shrinkImage(file))
       const result = await api.upload<TachOcrResult>('/flights/ocr-photo', fd)
       setOcrResult(result)
       setOcrImageKey(result.image_key)
@@ -141,6 +146,7 @@ export function EditFlight() {
         oil_added_quarts: oilAdded ? parseFloat(oilAdded) : null,
         notes: notes || null,
         pilot_id: pilotId || null,
+        pilot_name: otherPilot?.trim() || null,
         exclude_from_allotment: excludeFromAllotment,
         ...(ocrImageKey ? { ocr_source_image_key: ocrImageKey } : {}),
       })
@@ -185,6 +191,7 @@ export function EditFlight() {
           </button>
           <h1 className="text-lg font-semibold">Edit Flight</h1>
         </div>
+        {id && <div className="ml-auto flex flex-wrap items-center"><GarminUploadButton flightId={id} onDone={() => {}} label="Add Garmin data" /></div>}
         <button
           type="button"
           onClick={handleDelete}
@@ -212,20 +219,7 @@ export function EditFlight() {
         </Field>
 
         {/* Pilot */}
-        {members.length > 1 && (
-          <div className="space-y-1.5">
-            <Label>Pilot</Label>
-            <select
-              value={pilotId}
-              onChange={e => setPilotId(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              {members.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <PilotPicker members={members} pilotId={pilotId} setPilotId={setPilotId} otherName={otherPilot} setOtherName={setOtherPilot} />
 
         {/* Route */}
         <Field label={<>Route <span className="font-normal text-muted-foreground">(optional)</span></>}>

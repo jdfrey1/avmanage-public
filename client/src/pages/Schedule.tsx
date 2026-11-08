@@ -40,6 +40,25 @@ function formatTimeRange(start: string, end: string) {
   return `${label} · ${fmt(start)} – ${fmt(end)}`
 }
 
+// "3 flights logged · Alex 2, Sam 1" for a reservation; null when not applicable.
+function FlightsLogged({ b }: { b: ScheduleBlock }) {
+  const logged = b.flights_logged
+  if (b.block_type !== 'reservation' || !logged) return null
+  const total = logged.reduce((n, p) => n + p.count, 0)
+  if (total === 0) {
+    return b.day_over
+      ? <p className="mt-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">No flights logged</p>
+      : null
+  }
+  const who = logged.length === 1
+    ? ` (${logged[0].pilot.split(' ')[0]})`
+    : ` · ${logged.map(p => `${p.pilot.split(' ')[0]} ${p.count}`).join(', ')}`
+  return <p className="mt-0.5 text-[11px] text-emerald-700 dark:text-emerald-400">{total} flight{total > 1 ? 's' : ''} logged{who}</p>
+}
+
+const unflown = (b: ScheduleBlock) =>
+  b.block_type === 'reservation' && !!b.day_over && !!b.flights_logged && b.flights_logged.length === 0
+
 function blockOverlapsDay(b: ScheduleBlock, year: number, month: number, day: number) {
   const dayStart = new Date(year, month, day).getTime()
   const dayEnd   = new Date(year, month, day + 1).getTime()
@@ -275,7 +294,7 @@ export function Schedule() {
               {dayPicker.blocks.map(b => (
                 <div
                   key={b.id}
-                  className="flex cursor-pointer items-start gap-3 rounded-md border bg-background p-2.5 transition-colors hover:bg-accent/40"
+                  className={cn('flex cursor-pointer items-start gap-3 rounded-md border bg-background p-2.5 transition-colors hover:bg-accent/40', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
                   onClick={() => navigate(`/schedule/${b.id}/edit`)}
                 >
                   <Badge variant={blockPilotVariant(b, user?.id) as any} className="mt-0.5 shrink-0">
@@ -284,6 +303,7 @@ export function Schedule() {
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{b.title}</p>
                     <p className="text-xs text-muted-foreground">{formatTimeRange(b.start_dt, b.end_dt)}</p>
+                    <FlightsLogged b={b} />
                     {notInsured(b) && <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Not covered by insurance on record</p>}
                   </div>
                 </div>
@@ -307,7 +327,7 @@ export function Schedule() {
           {blocks.map(b => (
             <div
               key={b.id}
-              className="flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 hover:bg-accent/40 active:bg-accent/60 transition-colors"
+              className={cn('flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 hover:bg-accent/40 active:bg-accent/60 transition-colors', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
               onClick={() => navigate(`/schedule/${b.id}/edit`)}
             >
               <Badge variant={blockPilotVariant(b, user?.id) as any} className="mt-0.5 shrink-0">
@@ -323,6 +343,7 @@ export function Schedule() {
                   )}
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">{formatTimeRange(b.start_dt, b.end_dt)}</p>
+                <FlightsLogged b={b} />
                 {notInsured(b) && <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Not covered by insurance on record</p>}
                 {b.notes && <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{b.notes}</p>}
               </div>

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { FlightAwareInfo, UnmatchedFlightAware } from '@/components/FlightAwareInfo'
+import { GarminDataEmpty, GarminDataInfo, UnmatchedGarmin } from '@/components/GarminData'
 import { cn } from '@/lib/utils'
 
 function formatDate(iso: string) {
@@ -92,7 +93,7 @@ export function Flights() {
     return s
   }, 0)
 
-  const pilots = [...new Map(flights.map(f => [f.pilot_id, f.pilot_name])).entries()]
+  const pilots = [...new Map(flights.map(f => [f.pilot_id, f.member_name])).entries()]
 
   return (
     <div className="flex flex-col">
@@ -204,7 +205,10 @@ export function Flights() {
         {loading && (
           <p className="py-12 text-center text-sm text-muted-foreground">Loading…</p>
         )}
-        <UnmatchedFlightAware flights={flights} onChange={() => setReloadKey(k => k + 1)} />
+        <div className="mb-3 grid gap-3 md:grid-cols-2">
+          <UnmatchedFlightAware flights={flights} onChange={() => setReloadKey(k => k + 1)} />
+          <UnmatchedGarmin flights={flights} reloadKey={reloadKey} onChange={() => setReloadKey(k => k + 1)} />
+        </div>
 
         {error && (
           <p className="py-12 text-center text-sm text-destructive">{error}</p>
@@ -231,7 +235,7 @@ export function Flights() {
               </p>
               <div className="space-y-2">
                 {dayFlights.map(f => (
-                  <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} />
+                  <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} onChange={() => setReloadKey(k => k + 1)} />
                 ))}
               </div>
             </div>
@@ -239,7 +243,7 @@ export function Flights() {
         ) : (
           <div className="space-y-2">
             {filteredFlights.map(f => (
-              <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} showDate />
+              <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} showDate onChange={() => setReloadKey(k => k + 1)} />
             ))}
           </div>
         )}
@@ -262,7 +266,7 @@ function FilterTab({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-function FlightCard({ flight: f, isSelf, showDate }: { flight: Flight; isSelf: boolean; showDate?: boolean }) {
+function FlightCard({ flight: f, isSelf, showDate, onChange }: { flight: Flight; isSelf: boolean; showDate?: boolean; onChange: () => void }) {
   const navigate = useNavigate()
   const tachTime = parseFloat(f.tach_time).toFixed(1)
   const hobbsTime = f.hobbs_start && f.hobbs_end
@@ -302,7 +306,7 @@ function FlightCard({ flight: f, isSelf, showDate }: { flight: Flight; isSelf: b
         <div className="flex shrink-0 items-center gap-1.5">
           {f.exclude_from_allotment && <Badge variant="outline">Excluded</Badge>}
           <Badge variant={isSelf ? 'default' : 'secondary'}>
-            {f.pilot_name.split(' ')[0]}
+            {f.other_pilot ? `${f.other_pilot} → ${f.member_name.split(' ')[0]}` : f.pilot_name.split(' ')[0]}
           </Badge>
         </div>
       </div>
@@ -330,7 +334,16 @@ function FlightCard({ flight: f, isSelf, showDate }: { flight: Flight; isSelf: b
         <p className="mt-1.5 line-clamp-2 text-sm">{f.notes}</p>
       )}
 
-      {f.fa_id && <FlightAwareInfo flight={f} />}
+      {(!!f.fa_tracks?.length || !!f.garmin_logs?.length) && (
+        <div className="mt-2 grid gap-2 md:grid-cols-2">
+          {f.fa_tracks?.length
+            ? <FlightAwareInfo tracks={f.fa_tracks} onDetached={onChange} />
+            : <div className="h-full rounded-md border border-dashed p-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">FlightAware</span> · no track</div>}
+          {f.garmin_logs?.length
+            ? <GarminDataInfo logs={f.garmin_logs} onChange={onChange} />
+            : <GarminDataEmpty flightId={f.id} onChange={onChange} />}
+        </div>
+      )}
     </div>
   )
 }

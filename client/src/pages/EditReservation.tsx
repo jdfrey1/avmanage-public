@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { InsuranceWarning, useAircraftStatus } from '@/components/AircraftStatusBanner'
@@ -238,7 +239,7 @@ export function EditReservation() {
         {(
           <div className="space-y-1.5">
             <Label>Pilot</Label>
-            <select
+            <Select
               value={pilotId}
               onChange={e => setPilotId(e.target.value)}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -247,7 +248,7 @@ export function EditReservation() {
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}
               <option value="custom">Other (custom)…</option>
-            </select>
+            </Select>
             {isCustomPilot && (
               <Input
                 type="text"

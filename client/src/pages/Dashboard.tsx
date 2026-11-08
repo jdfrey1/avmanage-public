@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Clock, DollarSign, Plane, AlertTriangle, CalendarDays, ShieldCheck, ShieldAlert, Plus, Download } from 'lucide-react'
+import { Activity, Clock, DollarSign, Plane, AlertTriangle, CalendarDays, ShieldCheck, ShieldAlert, Plus, Download } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 import { useAuth } from '@/context/AuthContext'
 import { setPendingPhoto } from '@/lib/pendingPhoto'
 import { AircraftStatusBanner, useAircraftStatus } from '@/components/AircraftStatusBanner'
-import { api, type Flight, type ScheduleBlock, type PartnershipMember, type LedgerEntry, type AnnualHoursSummary, type Squawk, type Partnership, type CurrencyStatus } from '@/lib/api'
+import { api, type DashboardFinding, type Flight, type ScheduleBlock, type PartnershipMember, type LedgerEntry, type AnnualHoursSummary, type Squawk, type Partnership, type CurrencyStatus } from '@/lib/api'
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -55,6 +55,7 @@ export function Dashboard() {
   const [currency, setCurrency] = useState<CurrencyStatus | null>(null)
   const [partnership, setPartnership] = useState<Partnership | null>(null)
   const [squawks, setSquawks] = useState<Squawk[]>([])
+  const [engineFindings, setEngineFindings] = useState<DashboardFinding[]>([])
   const aircraftStatus = useAircraftStatus()
   const [lastFlight, setLastFlight]       = useState<Flight | null>(null)
   const [upcoming, setUpcoming]           = useState<ScheduleBlock[]>([])
@@ -85,8 +86,12 @@ export function Dashboard() {
       .then(([e]) => e && setLedgerEntry(e))
       .catch(() => {})
 
-    api.get<Squawk[]>('/squawks?status=open')
+    api.get<Squawk[]>('/squawks?status=unresolved')
       .then(setSquawks)
+      .catch(() => {})
+
+    api.get<DashboardFinding[]>('/garmin/findings')
+      .then(setEngineFindings)
       .catch(() => {})
 
     const now = new Date().toISOString()
@@ -273,31 +278,6 @@ export function Dashboard() {
         </Card>
       </div>
 
-      {/* Squawks */}
-      <Card className="cursor-pointer" onClick={() => navigate('/maintenance')}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-1.5">
-            <AlertTriangle className="h-3.5 w-3.5" /> Open Squawks
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {squawks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No open squawks</p>
-          ) : (
-            <ul className="space-y-2">
-              {squawks.map(s => (
-                <li key={s.id} className="flex items-start gap-2">
-                  <Badge variant={squawkVariant(s.severity) as any} className="mt-0.5 shrink-0 capitalize">
-                    {s.severity}
-                  </Badge>
-                  <span className="text-sm">{s.description}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
-
       {/* Upcoming reservations */}
       <Card className="cursor-pointer" onClick={() => navigate('/schedule')}>
         <CardHeader>
@@ -333,6 +313,62 @@ export function Dashboard() {
         </CardContent>
       </Card>
 
+      {/* Squawks */}
+      <Card className="cursor-pointer" onClick={() => navigate('/maintenance')}>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <AlertTriangle className="h-3.5 w-3.5" /> Open Squawks
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {squawks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No open squawks</p>
+          ) : (
+            <ul className="space-y-2">
+              {squawks.map(s => (
+                <li key={s.id} className="flex items-start gap-2">
+                  <Badge variant={squawkVariant(s.severity) as any} className="mt-0.5 shrink-0 capitalize">
+                    {s.severity}
+                  </Badge>
+                  <span className="text-sm">{s.description}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Data log insights (Garmin data findings) — only when something is open */}
+      {engineFindings.length > 0 && (
+        <Card className="cursor-pointer" onClick={() => navigate('/maintenance?tab=engine')}>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-1.5">
+              <Activity className="h-3.5 w-3.5" /> Data Log Insights
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-2">
+              {engineFindings.slice(0, 5).map(f => (
+                <li key={f.key} className="flex items-start gap-2">
+                  <Badge variant={(f.severity === 'warning' ? 'destructive' : 'warning') as any} className="mt-0.5 shrink-0 capitalize">
+                    {f.severity}
+                  </Badge>
+                  <span className="min-w-0 text-sm">
+                    {f.title}
+                    {f.run && (
+                      <span className="block text-xs text-muted-foreground">
+                        {new Date(f.run.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · {f.run.origin ?? '?'}→{f.run.destination ?? '?'}{f.run.pilot_name && ` · ${f.run.pilot_name.split(' ')[0]}`}
+                      </span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {engineFindings.length > 5 && <p className="mt-2 text-xs text-muted-foreground">+{engineFindings.length - 5} more on the Data Logs tab</p>}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Currency */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -341,6 +377,15 @@ export function Dashboard() {
           </CardTitle>
           <div className="flex items-center gap-1.5">
             <MemberSwitcher members={upcomingMembers} selectedId={hoursMemberId} onSelect={setHoursUserId} />
+            {hoursMemberId === user?.id && (
+              <button
+                onClick={() => navigate('/settings?open=account')}
+                className="rounded-md p-1 text-muted-foreground hover:text-foreground"
+                title="Add landings/approaches since last import"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
             {hoursMemberId === user?.id && (
               <button
                 onClick={() => importRef.current?.click()}

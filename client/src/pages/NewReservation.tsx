@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChevronLeft } from 'lucide-react'
 import { AircraftStatusBanner, InsuranceWarning, useAircraftStatus } from '@/components/AircraftStatusBanner'
@@ -78,7 +79,7 @@ export function NewReservation() {
       })
       .catch(() => {})
     api.get<CurrencyStatus>('/currency').then(setCurrency).catch(() => {})
-    api.get<Squawk[]>('/squawks?status=open').then(setOpenSquawks).catch(() => {})
+    api.get<Squawk[]>('/squawks?status=unresolved').then(setOpenSquawks).catch(() => {})
   }, [user?.id])
 
   function toggleAllDay(checked: boolean) {
@@ -233,7 +234,7 @@ export function NewReservation() {
         {(
           <div className="space-y-1.5">
             <Label>Pilot</Label>
-            <select
+            <Select
               value={pilotId}
               onChange={e => setPilotId(e.target.value)}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -242,7 +243,7 @@ export function NewReservation() {
                 <option key={m.id} value={m.id}>{m.name}</option>
               ))}
               <option value="custom">Other (custom)…</option>
-            </select>
+            </Select>
             {isCustomPilot && (
               <Input
                 type="text"

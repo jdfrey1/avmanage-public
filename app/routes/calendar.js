@@ -138,7 +138,7 @@ router.get('/:token.ics', async (req, res) => {
       ),
       pool.query(
         `SELECT f.id, f.flight_date, f.route, f.flight_time, f.notes,
-                u.name AS pilot_name
+                COALESCE(f.pilot_name, u.name) AS pilot_name
          FROM flights f
          LEFT JOIN users u ON u.id = f.pilot_id
          WHERE f.partnership_id = $1

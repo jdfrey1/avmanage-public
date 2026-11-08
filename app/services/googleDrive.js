@@ -15,6 +15,7 @@ const FOLDER_NAMES = {
   invoices: 'Invoices',
   flightPhotos: 'Flight Photos',
   foreflight: 'ForeFlight Imports',
+  garminLogs: 'Garmin Data Logs',
   backups: 'Database Backups',
 };
 

@@ -58,13 +58,29 @@ async function getPartnershipId(userId) {
   return rows[0].partnership_id;
 }
 
+// Reservations carry the flights logged on their local day(s), counted per member charged, and whether
+// those days are over (so the page can flag reservations nobody logged a flight for).
+const TZ = (process.env.APP_TIMEZONE || 'America/New_York').replace(/[^A-Za-z0-9_/+-]/g, '');
+const LOCAL_START = `(s.start_dt AT TIME ZONE '${TZ}')::date`;
+const LOCAL_END = `((s.end_dt - interval '1 second') AT TIME ZONE '${TZ}')::date`;
 const SELECT_BLOCK = `
   SELECT
     s.id, s.block_type, s.start_dt, s.end_dt, s.title, s.notes,
     s.is_all_day, s.pilot_id, s.pilot_name,
     s.delivery_ack_at, s.return_ack_at, s.delivery_tach, s.return_tach,
     s.created_at, s.created_by,
-    u.name AS created_by_name
+    u.name AS created_by_name,
+    ${LOCAL_END} < (NOW() AT TIME ZONE '${TZ}')::date AS day_over,
+    CASE WHEN s.block_type = 'reservation' THEN COALESCE((
+      SELECT json_agg(json_build_object('pilot', p.pilot, 'count', p.n) ORDER BY p.n DESC, p.pilot)
+      FROM (
+        SELECT fu.name AS pilot, COUNT(*)::int AS n
+        FROM flights f JOIN users fu ON fu.id = f.pilot_id
+        WHERE f.partnership_id = s.partnership_id
+          AND f.flight_date BETWEEN ${LOCAL_START} AND ${LOCAL_END}
+        GROUP BY 1
+      ) p
+    ), '[]'::json) END AS flights_logged
   FROM schedule_blocks s
   JOIN users u ON u.id = s.created_by
 `;

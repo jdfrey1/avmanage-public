@@ -217,7 +217,7 @@ async function getHoursSummary(userId, partnershipId) {
 // per-pilot flight list.
 async function getMonthlyFlights(userId, partnershipId, period) {
   const { rows } = await pool.query(`
-    SELECT TO_CHAR(flight_date, 'YYYY-MM-DD') AS flight_date, route, flight_time, exclude_from_allotment, notes
+    SELECT TO_CHAR(flight_date, 'YYYY-MM-DD') AS flight_date, route, flight_time, exclude_from_allotment, notes, pilot_name
     FROM flights
     WHERE pilot_id = $1
       AND partnership_id = $2
@@ -394,7 +394,7 @@ async function getInspections(partnershipId) {
 // returned so the scheduler can warn about reservations past it.
 async function getAircraftStatus(partnershipId) {
   const [{ rows: major }, inspections, { rows: [p] }] = await Promise.all([
-    pool.query(`SELECT id, description FROM squawks WHERE partnership_id = $1 AND status = 'open' AND severity = 'major' ORDER BY reported_at`, [partnershipId]),
+    pool.query(`SELECT id, description FROM squawks WHERE partnership_id = $1 AND status <> 'resolved' AND severity = 'major' ORDER BY reported_at`, [partnershipId]),
     getInspections(partnershipId),
     pool.query(`SELECT TO_CHAR(insurance_expires_date, 'YYYY-MM-DD') AS insurance_expires_date FROM partnerships WHERE id = $1`, [partnershipId]),
   ]);
@@ -409,10 +409,10 @@ async function getAircraftStatus(partnershipId) {
 
 async function getOpenSquawks(partnershipId) {
   const { rows } = await pool.query(`
-    SELECT s.id, s.description, s.severity, s.tach_at_report, s.reported_at, u.name AS reported_by_name
+    SELECT s.id, s.description, s.severity, s.status, s.tach_at_report, s.reported_at, u.name AS reported_by_name
     FROM squawks s
     JOIN users u ON u.id = s.reported_by
-    WHERE s.partnership_id = $1 AND s.status = 'open'
+    WHERE s.partnership_id = $1 AND s.status <> 'resolved'
     ORDER BY CASE s.severity WHEN 'major' THEN 0 WHEN 'minor' THEN 1 ELSE 2 END, s.reported_at DESC
   `, [partnershipId]);
   return rows;
@@ -445,7 +445,7 @@ function flightsList(flights, monthLabel) {
   const rows = flights.map(f => `
     <tr>
       <td style="padding:4px 12px 4px 0;">${f.flight_date}</td>
-      <td style="padding:4px 12px 4px 0;">${f.route || ''}</td>
+      <td style="padding:4px 12px 4px 0;">${f.route || ''}${f.pilot_name ? ` (flown by ${f.pilot_name})` : ''}</td>
       <td style="padding:4px 0;">${f.flight_time ? `${parseFloat(f.flight_time).toFixed(1)} hrs` : ''}${f.exclude_from_allotment ? ' (excluded from allotment)' : ''}</td>
     </tr>`).join('');
   return `<table style="border-collapse:collapse;font-size:14px;margin-top:8px;">${rows}</table>`;
@@ -541,7 +541,7 @@ async function buildMonthlyReportHtml(partnershipId) {
     : '<tr><td style="padding:4px 0;" colspan="2">No inspections set up.</td></tr>';
 
   const squawkRows = openSquawks.length
-    ? openSquawks.map(s => `<tr><td style="padding:4px 12px 4px 0;text-transform:capitalize;">${s.severity}</td><td style="padding:4px 0;">${s.description}</td></tr>`).join('')
+    ? openSquawks.map(s => `<tr><td style="padding:4px 12px 4px 0;text-transform:capitalize;">${s.severity}</td><td style="padding:4px 0;">${s.description}${s.status === 'in_progress' ? ' <em style="color:#666;">(planned)</em>' : ''}</td></tr>`).join('')
     : '<tr><td style="padding:4px 0;" colspan="2">No open squawks.</td></tr>';
 
   return `

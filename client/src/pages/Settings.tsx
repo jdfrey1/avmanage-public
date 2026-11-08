@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
+import { CurrencyEntries } from '@/components/CurrencyEntries'
 
 function ChevronDown({ className }: { className?: string }) {
   return (
@@ -50,7 +51,8 @@ export function Settings() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [openSections, setOpenSections] = useState<Set<string>>(new Set<string>())
+  // /settings?open=account opens that section (the Dashboard currency card links here)
+  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set<string>(new URLSearchParams(window.location.search).getAll('open')))
   const toggleSection = (id: string) =>
     setOpenSections(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -227,10 +229,10 @@ export function Settings() {
     try {
       const fd = new FormData()
       fd.append('logbook', file)
-      const result = await api.upload<{ imported: number; skipped: number; last_import_at: string; last_import_file: string }>('/currency/import', fd)
+      const result = await api.upload<{ imported: number; skipped: number; manualCleared?: number; last_import_at: string; last_import_file: string }>('/currency/import', fd)
       setLastImport(result.last_import_at)
       setLastImportFile(result.last_import_file ?? null)
-      setImportMsg(`Imported ${result.imported} flights`)
+      setImportMsg(`Imported ${result.imported} flights${result.manualCleared ? ` · ${result.manualCleared} manual entr${result.manualCleared === 1 ? 'y' : 'ies'} now covered by ForeFlight removed` : ''}`)
       setImportStatus('done')
     } catch (err: any) {
       setImportMsg(err.message ?? 'Import failed')
@@ -379,6 +381,12 @@ export function Settings() {
               <Button size="sm" variant="outline" disabled={bfrSaving} onClick={saveBfr}>
                 {bfrSaved ? 'Saved!' : bfrSaving ? 'Saving…' : 'Save BFR'}
               </Button>
+            </div>
+
+            {/* Manual currency entries */}
+            <div className="space-y-3 border-t pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Flights since last import</p>
+              <CurrencyEntries key={lastImport ?? 'none'} />
             </div>
 
             {/* Logbook */}

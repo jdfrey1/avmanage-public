@@ -43,13 +43,13 @@ router.get('/:id/track', async (req, res) => {
   } catch (err) { fail(res, err, 'GET /flightaware/:id/track'); }
 });
 
-// POST /api/flightaware/:id/attach { flight_id } — attach by hand
+// POST /api/flightaware/:id/attach { flight_id } — attach by hand (a flight can have several)
 router.post('/:id/attach', async (req, res) => {
   try {
     const { partnership_id } = await getMembership(req.session.userId);
     const { rows: [f] } = await pool.query('SELECT id FROM flights WHERE id = $1 AND partnership_id = $2', [req.body.flight_id, partnership_id]);
     if (!f) return res.status(404).json({ error: 'Flight not found' });
-    await pool.query('UPDATE flightaware_flights SET flight_id = NULL WHERE flight_id = $1', [f.id]);
+    // Adds to any tracks the flight already has (one per leg).
     const { rowCount } = await pool.query('UPDATE flightaware_flights SET flight_id = $3, ignored = false WHERE id = $1 AND partnership_id = $2', [req.params.id, partnership_id, f.id]);
     if (!rowCount) return res.status(404).json({ error: 'FlightAware flight not found' });
     res.json({ ok: true });
@@ -70,10 +70,14 @@ for (const [action, value] of [['ignore', true], ['unignore', false]]) {
   });
 }
 
+// POST /api/flightaware/:id/detach — unhook from its logged flight; it goes back to the unmatched
+// list and won't be matched to that flight automatically again.
 router.post('/:id/detach', async (req, res) => {
   try {
     const { partnership_id } = await getMembership(req.session.userId);
-    await pool.query('UPDATE flightaware_flights SET flight_id = NULL WHERE id = $1 AND partnership_id = $2', [req.params.id, partnership_id]);
+    await pool.query(
+      'UPDATE flightaware_flights SET detached_flight_id = flight_id, flight_id = NULL WHERE id = $1 AND partnership_id = $2 AND flight_id IS NOT NULL',
+      [req.params.id, partnership_id]);
     res.json({ ok: true });
   } catch (err) { fail(res, err, 'POST /flightaware/:id/detach'); }
 });

@@ -1,99 +1,107 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Modal } from '@/components/Modal'
+import { TrackMap } from '@/components/TrackMap'
+import { LineChart, SERIES_COLORS, timeTicks } from '@/components/LineChart'
+import { Select } from '@/components/ui/select'
 import { ExternalLink } from 'lucide-react'
-import { api, type Flight, type FlightAwareUnmatched, type TrackPoint } from '@/lib/api'
+import { api, type Flight, type FlightAwareTrack, type FlightAwareUnmatched, type TrackPoint } from '@/lib/api'
 
-const clock = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '—'
+const clock = (iso?: string | number | null) =>
+  iso != null ? new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '—'
 
-function Spark({ label, values, unit }: { label: string; values: number[]; unit: string }) {
-  if (values.length < 2) return null
-  const max = Math.max(...values, 1)
-  const pts = values.map((v, i) => `${(i / (values.length - 1)) * 300},${58 - (v / max) * 54}`).join(' ')
-  return (
-    <div>
-      <p className="text-[10px] text-muted-foreground">{label} (max {Math.round(max).toLocaleString()} {unit})</p>
-      <svg viewBox="0 0 300 60" className="h-14 w-full rounded bg-muted/40">
-        <polyline points={pts} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" />
-      </svg>
-    </div>
-  )
-}
-
-function TrackView({ track }: { track: TrackPoint[] }) {
-  const lat0 = track.reduce((s, p) => s + p.lat, 0) / track.length
-  const k = Math.cos((lat0 * Math.PI) / 180)
-  const xs = track.map(p => p.lon * k), ys = track.map(p => -p.lat)
-  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)]
-  const span = Math.max(x1 - x0, y1 - y0, 1e-6)
-  const sc = 120 / span, ox = (300 - (x1 - x0) * sc) / 2, oy = (140 - (y1 - y0) * sc) / 2
-  const pts = track.map((_, i) => `${ox + (xs[i] - x0) * sc},${oy + (ys[i] - y0) * sc}`)
-  const alts = track.map(p => p.alt ?? 0), gss = track.map(p => p.gs ?? 0)
-  return (
-    <div className="space-y-2">
-      <svg viewBox="0 0 300 140" className="h-40 w-full rounded bg-muted/40">
-        <polyline points={pts.join(' ')} fill="none" stroke="currentColor" strokeWidth="1.5" className="text-primary" />
-        <circle cx={pts[0].split(',')[0]} cy={pts[0].split(',')[1]} r="3" className="fill-emerald-500" />
-        <circle cx={pts[pts.length - 1].split(',')[0]} cy={pts[pts.length - 1].split(',')[1]} r="3" className="fill-destructive" />
-      </svg>
-      <Spark label="Altitude" values={alts} unit="ft" />
-      <Spark label="Groundspeed" values={gss} unit="kt" />
-    </div>
-  )
-}
-
-export function FlightAwareInfo({ flight: f }: { flight: Flight }) {
+// FlightAware track in a pop-up: map plus altitude and groundspeed with a shared cursor.
+export function FlightAwareTrackModal({ id, title, onClose }: { id: string; title: string; onClose: () => void }) {
   const [track, setTrack] = useState<TrackPoint[] | null>(null)
+  const [msg, setMsg] = useState('')
+  const [hover, setHover] = useState<number | null>(null)
+  useEffect(() => {
+    api.get<{ track: TrackPoint[]; status: string | null }>(`/flightaware/${id}/track`)
+      .then(r => (r.track.length ? setTrack(r.track) : setMsg('Track not available for this flight.')))
+      .catch(() => setMsg('Could not load the track.'))
+  }, [id])
+  const points = useMemo(() => track?.map(p => ({ lat: p.lat, lon: p.lon })) ?? [], [track])
+  const t0 = track ? track[0].t * 1000 : 0
+  const x = track?.map(p => p.t - track[0].t) ?? []
+  const xLabel = (sec: number) => clock(t0 + sec * 1000)
+  const ticks = track ? timeTicks(x, t0) : []
+  return (
+    <Modal title={title} subtitle="FlightAware track" onClose={onClose}>
+      {!track ? <p className="text-sm text-muted-foreground">{msg || 'Loading…'}</p> : (
+        <div className="space-y-4">
+          <TrackMap points={points} hover={hover} />
+          <div className="grid gap-4 md:grid-cols-2">
+            <LineChart title="Altitude" unit="ft" x={x} xLabel={xLabel} xTicks={ticks} hover={hover} onHover={setHover}
+              series={[{ label: 'Altitude', values: track.map(p => p.alt), color: SERIES_COLORS[3] }]} />
+            <LineChart title="Groundspeed" unit="kt" x={x} xLabel={xLabel} xTicks={ticks} hover={hover} onHover={setHover}
+              series={[{ label: 'GS', values: track.map(p => p.gs), color: SERIES_COLORS[2] }]} />
+          </div>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+// One FlightAware leg attached to a logged flight, with its own track view and Detach.
+function AttachedLeg({ leg, onDetached }: { leg: FlightAwareTrack; onDetached: () => void }) {
   const [open, setOpen] = useState(false)
   const [msg, setMsg] = useState('')
+  const [confirmDetach, setConfirmDetach] = useState(false)
 
-  async function toggle(e: React.MouseEvent) {
-    e.stopPropagation()
-    if (open) return setOpen(false)
-    setOpen(true)
-    if (track) return
-    try {
-      const r = await api.get<{ track: TrackPoint[]; status: string | null }>(`/flightaware/${f.fa_id}/track`)
-      if (r.track.length) setTrack(r.track)
-      else setMsg('Track not available for this flight.')
-    } catch { setMsg('Could not load the track.') }
+  async function detach() {
+    try { await api.post(`/flightaware/${leg.id}/detach`, {}); onDetached() }
+    catch { setMsg('Could not detach.'); setConfirmDetach(false) }
   }
 
   return (
-    <div className="mt-2 rounded-md border bg-muted/20 p-2 text-xs" onClick={e => e.stopPropagation()}>
+    <div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="font-medium">FlightAware</span>
-        <span className="tabular-nums">{f.fa_origin ?? '?'} {clock(f.fa_off_time)} → {f.fa_destination ?? '?'} {clock(f.fa_on_time)}</span>
-        {f.fa_en_route_min != null && <span className="tabular-nums text-muted-foreground">{(f.fa_en_route_min / 60).toFixed(1)} hrs en route</span>}
-        {f.fa_url && (
-          <a href={f.fa_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
+        <span className="tabular-nums">{leg.origin ?? '?'} {clock(leg.off_time)} → {leg.destination ?? '?'} {clock(leg.on_time)}</span>
+        {leg.en_route_min != null && <span className="tabular-nums text-muted-foreground">{(leg.en_route_min / 60).toFixed(1)} hrs en route</span>}
+        {leg.url && (
+          <a href={leg.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-0.5 text-primary hover:underline">
             Flight page <ExternalLink className="h-3 w-3" />
           </a>
         )}
-        {f.fa_has_track && (
-          <button type="button" onClick={toggle} className="text-primary hover:underline">{open ? 'Hide track' : 'View track'}</button>
+        {leg.has_track && (
+          <button type="button" onClick={() => setOpen(true)} className="text-primary hover:underline">View track</button>
+        )}
+        {confirmDetach ? (
+          <span className="ml-auto flex items-center gap-2">
+            <span className="text-muted-foreground">Wrong flight?</span>
+            <button type="button" onClick={detach} className="text-destructive hover:underline">Detach</button>
+            <button type="button" onClick={() => setConfirmDetach(false)} className="text-muted-foreground hover:underline">Cancel</button>
+          </span>
+        ) : (
+          <button type="button" onClick={() => setConfirmDetach(true)} className="ml-auto text-muted-foreground hover:text-foreground hover:underline">Detach</button>
         )}
       </div>
-      {open && (track ? <div className="mt-2"><TrackView track={track} /></div> : <p className="mt-2 text-muted-foreground">{msg || 'Loading…'}</p>)}
+      {msg && <p className="mt-1 text-destructive">{msg}</p>}
+      {open && <FlightAwareTrackModal id={leg.id} title={`${leg.origin ?? '?'} → ${leg.destination ?? '?'} · ${leg.off_time ? new Date(leg.off_time).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}`} onClose={() => setOpen(false)} />}
+    </div>
+  )
+}
+
+export function FlightAwareInfo({ tracks, onDetached }: { tracks: FlightAwareTrack[]; onDetached: () => void }) {
+  const total = tracks.reduce((s, t) => s + (t.en_route_min ?? 0), 0)
+  return (
+    <div className="h-full space-y-1.5 rounded-md border bg-muted/20 p-2 text-xs" onClick={e => e.stopPropagation()}>
+      <p className="font-medium">
+        FlightAware
+        {tracks.length > 1 && <span className="font-normal text-muted-foreground"> · {tracks.length} legs, {(total / 60).toFixed(1)} hrs en route</span>}
+      </p>
+      {tracks.map(t => <AttachedLeg key={t.id} leg={t} onDetached={onDetached} />)}
     </div>
   )
 }
 
 // Alerts that didn't match a logged flight (e.g. a maintenance test flight), with a manual
 // "attach to flight" picker limited to flights logged within a day of the alert.
-function UnmatchedTrack({ id }: { id: string }) {
+function UnmatchedTrack({ id, title }: { id: string; title: string }) {
   const [open, setOpen] = useState(false)
-  const [track, setTrack] = useState<TrackPoint[] | null>(null)
-  async function toggle() {
-    setOpen(o => !o)
-    if (!track) {
-      const r = await api.get<{ track: TrackPoint[] }>(`/flightaware/${id}/track`).catch(() => null)
-      if (r?.track.length) setTrack(r.track)
-    }
-  }
   return (
     <>
-      <button type="button" onClick={toggle} className="ml-2 text-primary hover:underline">{open ? 'Hide track' : 'View track'}</button>
-      {open && <div className="mt-2">{track ? <TrackView track={track} /> : <p className="text-muted-foreground">Loading…</p>}</div>}
+      <button type="button" onClick={() => setOpen(true)} className="ml-2 text-primary hover:underline">View track</button>
+      {open && <FlightAwareTrackModal id={id} title={title} onClose={() => setOpen(false)} />}
     </>
   )
 }
@@ -132,7 +140,7 @@ export function UnmatchedFlightAware({ flights, onChange }: { flights: Flight[];
   const day = (iso: string) => new Date(iso).toLocaleDateString('en-CA')
   if (!items) return null
   return (
-    <div className="mb-3 rounded-lg border bg-card p-3 text-xs">
+    <div className="h-full rounded-lg border bg-card p-3 text-xs">
       <div className="flex items-center justify-between">
         <p className="font-medium">{showIgnored ? 'Ignored FlightAware flights' : 'FlightAware flights not matched to a logged flight'} ({items.length})</p>
         <button type="button" onClick={sync} disabled={syncing} className="text-primary hover:underline disabled:opacity-50">
@@ -156,19 +164,19 @@ export function UnmatchedFlightAware({ flights, onChange }: { flights: Flight[];
                   {d} · {it.origin ?? '?'} {clock(it.off_time)} → {it.destination ?? '?'} {clock(it.on_time)}
                   {it.en_route_min != null && <span className="text-muted-foreground"> · {(it.en_route_min / 60).toFixed(1)} hrs</span>}
                   {it.url && <a href={it.url} target="_blank" rel="noreferrer" className="ml-2 text-primary hover:underline">Flight page</a>}
-                  {it.has_track && <UnmatchedTrack id={it.id} />}
+                  {it.has_track && <UnmatchedTrack id={it.id} title={`${it.origin ?? '?'} → ${it.destination ?? '?'} · ${d}`} />}
                 </p>
                 <div className="mt-1.5 flex gap-2">
                   {!showIgnored && near.length > 0 && (
                     <>
-                    <select
+                    <Select
                       value={picked[it.id] ?? ''}
                       onChange={e => setPicked(p => ({ ...p, [it.id]: e.target.value }))}
                       className="flex-1 rounded-md border border-input bg-background px-2 py-1"
                     >
                       <option value="">Attach to a logged flight…</option>
-                      {near.map(f => <option key={f.id} value={f.id}>{f.flight_date} · {f.pilot_name.split(' ')[0]} · {f.route ?? 'no route'}</option>)}
-                    </select>
+                      {near.map(f => <option key={f.id} value={f.id}>{f.flight_date} · {f.pilot_name.split(' ')[0]} · {f.route ?? 'no route'}{f.fa_tracks?.length ? ` (adds to its ${f.fa_tracks.length} track${f.fa_tracks.length > 1 ? 's' : ''})` : ''}</option>)}
+                    </Select>
                     <button type="button" disabled={!picked[it.id]} onClick={() => attach(it.id)} className="rounded-md border px-2 py-1 disabled:opacity-40">Attach</button>
                     </>
                   )}

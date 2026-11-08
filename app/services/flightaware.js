@@ -145,16 +145,30 @@ async function pollEmails(days = 3) {
 // Attach each complete, unattached FlightAware record to the logged flight it describes.
 async function matchFlights() {
   const { rows: pending } = await pool.query(
-    `SELECT id, partnership_id, origin, destination, off_time, on_time, en_route_min,
+    `SELECT id, partnership_id, origin, destination, off_time, on_time, en_route_min, detached_flight_id,
             (off_time AT TIME ZONE '${LOCAL_TZ}')::date::text AS local_date
-     FROM flightaware_flights WHERE flight_id IS NULL AND NOT ignored AND off_time IS NOT NULL AND on_time IS NOT NULL`);
+     FROM flightaware_flights WHERE flight_id IS NULL AND NOT ignored AND off_time IS NOT NULL AND on_time IS NOT NULL
+     ORDER BY off_time`);
   let matched = 0;
   for (const ff of pending) {
+    // A later leg of the same outing (departs where an attached leg landed, within 4 hours of
+    // landing) joins that flight's tracks.
+    const { rows: [cont] } = await pool.query(
+      `SELECT x.flight_id FROM flightaware_flights x JOIN flights f ON f.id = x.flight_id
+       WHERE f.partnership_id = $1 AND f.id IS DISTINCT FROM $2 AND x.id <> $3
+         AND upper(x.destination) = upper($4) AND x.on_time <= $5 AND x.on_time > $5::timestamptz - interval '4 hours'
+       ORDER BY x.on_time DESC LIMIT 1`,
+      [ff.partnership_id, ff.detached_flight_id, ff.id, ff.origin || '', ff.off_time]);
+    if (cont) {
+      await pool.query('UPDATE flightaware_flights SET flight_id = $2 WHERE id = $1 AND flight_id IS NULL', [ff.id, cont.flight_id]);
+      matched++;
+      continue;
+    }
     const { rows: cands } = await pool.query(
       `SELECT f.id, f.route, f.flight_time::float AS flight_time FROM flights f
-       WHERE f.partnership_id = $1 AND f.flight_date = $2
+       WHERE f.partnership_id = $1 AND f.flight_date = $2 AND f.id IS DISTINCT FROM $3
          AND NOT EXISTS (SELECT 1 FROM flightaware_flights x WHERE x.flight_id = f.id)`,
-      [ff.partnership_id, ff.local_date]);
+      [ff.partnership_id, ff.local_date, ff.detached_flight_id]);
     if (!cands.length) continue;
     const enr = (ff.en_route_min ?? Math.round((ff.on_time - ff.off_time) / 60000)) / 60;
     const strip = (c) => (c || '').toUpperCase().replace(/^K(?=[A-Z0-9]{3}$)/, '');

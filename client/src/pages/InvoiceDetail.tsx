@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { ChevronLeft, ExternalLink, X } from 'lucide-react'
 import { api, type InvoiceDetail, type InvoiceItem, type LedgerEntry, type LogbookEntry, type PartnershipMember } from '@/lib/api'
@@ -200,11 +201,11 @@ export function InvoiceDetailPage() {
           </ul>
 
           <div className="flex flex-wrap items-center gap-2">
-            <select value={linkPerson} onChange={e => setLinkPerson(e.target.value)}
+            <Select value={linkPerson} onChange={e => setLinkPerson(e.target.value)}
               className="rounded-md border border-input bg-background px-2 py-1.5 text-xs">
               <option value="">Link an existing ledger entry for…</option>
               {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            </Select>
           </div>
           {linkPerson && (
             candidates.length === 0

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/context/AuthContext'
 import { api } from '@/lib/api'
@@ -25,7 +26,7 @@ export function Setup() {
   if (needsSetup === false) return <Navigate to="/login" replace />
   if (needsSetup === null) return null
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const set = (k: keyof typeof form) => (e: { target: { value: string } }) =>
     setForm(f => ({ ...f, [k]: e.target.value }))
 
   async function handleSubmit(e: FormEvent) {
@@ -82,11 +83,11 @@ export function Setup() {
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="role">Your role</Label>
-            <select id="role" value={form.role} onChange={set('role')}
+            <Select id="role" value={form.role} onChange={set('role')}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
               <option value="owner">Owner — I own the aircraft</option>
               <option value="lessee">Lessee / partner — I lease or share it</option>
-            </select>
+            </Select>
             <p className="text-xs text-muted-foreground">
               The owner pays the aircraft's costs and has no hour allotment; lessees have lease terms and hour allotments.
               You can add the other members, and change who the owner is, in Settings → Members.

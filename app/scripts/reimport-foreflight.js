@@ -1,13 +1,13 @@
 const fs = require('fs');
 const path = require('path');
 const pool = require('../db');
-const { importForeflightCsv } = require('../routes/currency');
+const { importForeflightCsv } = require('../services/foreflightImport');
 
 const UPLOADS_DIR = process.env.UPLOADS_DIR || '/data/uploads';
 
 // Reprocesses a user's already-uploaded ForeFlight CSV against the current import logic,
 // without requiring them to re-export/re-upload from ForeFlight. Useful after fixing a
-// parsing bug in importForeflightCsv (app/routes/currency.js).
+// parsing bug in importForeflightCsv (app/services/foreflightImport.js).
 async function reimport(userId) {
   const filepath = path.join(UPLOADS_DIR, 'foreflight', `${userId}_latest.csv`);
   if (!fs.existsSync(filepath)) throw new Error(`No stored ForeFlight CSV found for user ${userId}: ${filepath}`);

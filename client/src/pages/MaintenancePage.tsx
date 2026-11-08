@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { EngineTrends } from '@/components/EngineTrends'
+import { Select } from '@/components/ui/select'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Camera, Paperclip, Plus, X, RefreshCw, Download, FileText } from 'lucide-react'
 import { api, logbookApi, type Squawk, type MaintenanceEntry, type MaintenanceRecurring, type MaintenanceInterval, type InspectionItem, type CostAnalysis, type MaintenanceAttachment, type LogbookEntry, type LogbookDocument, type LogbookCategory, type LogbookCitation } from '@/lib/api'
@@ -9,8 +11,8 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-type Tab = 'squawks' | 'log' | 'logbook'
-type SquawkStatus = 'open' | 'resolved'
+type Tab = 'squawks' | 'log' | 'logbook' | 'engine'
+type SquawkStatus = 'open' | 'in_progress' | 'resolved'
 type Severity = 'major' | 'minor' | 'note'
 
 const CATEGORIES = ['maintenance', 'insurance', 'avionics', 'hangar', 'fuel', 'misc'] as const
@@ -35,8 +37,9 @@ const SEVERITY_LABEL: Record<Severity, string> = {
 }
 
 const STATUS_LABEL: Record<SquawkStatus, string> = {
-  open:     'New',
-  resolved: 'Resolved',
+  open:        'New',
+  in_progress: 'Planned',
+  resolved:    'Resolved',
 }
 
 const TODAY = new Date().toISOString().slice(0, 10)
@@ -71,12 +74,12 @@ function Opt() {
 
 function CatSelect({ value, onChange }: { value: Category; onChange: (v: Category) => void }) {
   return (
-    <select value={value} onChange={e => onChange(e.target.value as Category)}
+    <Select value={value} onChange={e => onChange(e.target.value as Category)}
       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
       {CATEGORIES.map(c => (
         <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
       ))}
-    </select>
+    </Select>
   )
 }
 
@@ -194,7 +197,7 @@ interface SquawksTabProps {
 
 function SquawksTab({ showAdd, setShowAdd, pendingAddFiles, setPendingAddFiles }: SquawksTabProps) {
   const [squawks, setSquawks]           = useState<Squawk[]>([])
-  const [selected, setSelected]         = useState<SquawkStatus[]>(['open'])
+  const [selected, setSelected]         = useState<SquawkStatus[]>(['open', 'in_progress'])
   const [loading, setLoading]           = useState(true)
   const [expandedId, setExpandedId]     = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -277,7 +280,7 @@ function SquawksTab({ showAdd, setShowAdd, pendingAddFiles, setPendingAddFiles }
       {error && <p className="text-sm text-destructive">{error}</p>}
 
       <div className="flex gap-2">
-        {(['open', 'resolved'] as SquawkStatus[]).map(s => (
+        {(['open', 'in_progress', 'resolved'] as SquawkStatus[]).map(s => (
           <button key={s} onClick={() => toggleStatus(s)}
             className={cn('rounded-full border px-3 py-1 text-xs transition-colors',
               selected.includes(s) ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border text-muted-foreground'
@@ -357,11 +360,14 @@ function SquawksTab({ showAdd, setShowAdd, pendingAddFiles, setPendingAddFiles }
                   </div>
                   <div className="space-y-1.5">
                     <Label>Status</Label>
-                    <select value={editStatus} onChange={e => setEditStatus(e.target.value as SquawkStatus)}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-                      <option value="open">New</option>
-                      <option value="resolved">Resolved</option>
-                    </select>
+                    <div className="flex gap-2">
+                      {(['open', 'in_progress', 'resolved'] as SquawkStatus[]).map(st => (
+                        <button key={st} type="button" onClick={() => setEditStatus(st)}
+                          className={cn('rounded-full border px-3 py-1.5 text-xs transition-colors',
+                            editStatus === st ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border text-muted-foreground'
+                          )}>{STATUS_LABEL[st]}</button>
+                      ))}
+                    </div>
                   </div>
                   <div className="space-y-1.5">
                     <Label>Resolution notes <Opt /></Label>
@@ -1473,7 +1479,7 @@ function LogbookImportForm({ onImported, onClose }: { onImported: () => void; on
 
       <div className="space-y-1.5">
         <Label>Category</Label>
-        <select
+        <Select
           value={category}
           onChange={e => setCategory(e.target.value as LogbookCategory)}
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
@@ -1481,7 +1487,7 @@ function LogbookImportForm({ onImported, onClose }: { onImported: () => void; on
           {Object.entries(LOGBOOK_CATEGORY_LABELS).map(([k, label]) => (
             <option key={k} value={k}>{label}</option>
           ))}
-        </select>
+        </Select>
       </div>
 
       {file ? (
@@ -1693,6 +1699,7 @@ export function MaintenancePage() {
       setTab('squawks')
       setShowAddSquawk(true)
     }
+    if (searchParams.get('tab') === 'engine') setTab('engine')
     if (searchParams.get('add') === 'entry') {
       setTab('log')
       setShowAddEntry(true)
@@ -1800,12 +1807,12 @@ export function MaintenancePage() {
           )}
         </div>
         <div className="flex border-b px-4">
-          {(['squawks', 'log', 'logbook'] as Tab[]).map(t => (
+          {(['squawks', 'log', 'logbook', 'engine'] as Tab[]).map(t => (
             <button key={t} onClick={() => handleTabChange(t)}
               className={cn('pb-2 pr-4 text-sm font-medium transition-colors border-b-2 -mb-px',
                 tab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
               )}>
-              {t === 'squawks' ? 'Squawks' : t === 'log' ? 'Cost Log' : 'Logbooks'}
+              {t === 'squawks' ? 'Squawks' : t === 'log' ? 'Cost Log' : t === 'logbook' ? 'Logbooks' : 'Data Logs'}
             </button>
           ))}
         </div>
@@ -1820,6 +1827,7 @@ export function MaintenancePage() {
         />
       )}
       {tab === 'logbook' && <LogbookTab showImport={showImportLogbook} setShowImport={setShowImportLogbook} />}
+      {tab === 'engine' && <EngineTrends />}
       {tab === 'log' && (
         <MaintenanceTab
           showAddEntry={showAddEntry}

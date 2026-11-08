@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Select } from '@/components/ui/select'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { api, documentsApi, uploadInvoice, type AircraftDocument, type LedgerEntry, type PartnershipMember } from '@/lib/api'
@@ -154,7 +155,7 @@ export function EditLedgerEntry() {
 
         <div className="space-y-1.5">
           <Label>Type</Label>
-          <select
+          <Select
             value={entryType}
             onChange={e => handleTypeChange(e.target.value)}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -165,7 +166,7 @@ export function EditLedgerEntry() {
             {!typesFor([role]).some(([k]) => k === entryType) && (
               <option value={entryType}>{TYPE_CONFIG[entryType]?.label ?? entryType.replace(/_/g, ' ')}</option>
             )}
-          </select>
+          </Select>
         </div>
 
         <div className="space-y-1.5">
@@ -245,7 +246,7 @@ export function EditLedgerEntry() {
               ))}
             </ul>
           )}
-          <select
+          <Select
             value="" onChange={e => linkDoc(e.target.value)}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
           >
@@ -253,7 +254,7 @@ export function EditLedgerEntry() {
             {allDocs.filter(d => d.doc_type !== 'invoice' && !docs.some(x => x.id === d.id)).map(d => (
               <option key={d.id} value={d.id}>{d.title}</option>
             ))}
-          </select>
+          </Select>
         </div>
 
         {error && <p className="text-sm text-destructive">{error}</p>}

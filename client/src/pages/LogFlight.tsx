@@ -1,13 +1,16 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { PilotPicker } from '@/components/PilotPicker'
 import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, Camera } from 'lucide-react'
-import { api, type Flight, type Squawk, type CurrencyStatus, type TachOcrResult, type PartnershipMember, type Partnership } from '@/lib/api'
+import { ChevronLeft, Camera, Upload } from 'lucide-react'
+import { api, type GarminLog, type Flight, type Squawk, type CurrencyStatus, type TachOcrResult, type PartnershipMember, type Partnership } from '@/lib/api'
 import { takePendingPhoto } from '@/lib/pendingPhoto'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { shrinkImage } from '@/lib/image'
+import { useGarminUpload, describeResults, garminSummary } from '@/components/GarminData'
 import { cn } from '@/lib/utils'
 
 const TABS_GALLONS = '60'
@@ -39,6 +42,7 @@ export function LogFlight() {
   // Pilot selection
   const [members, setMembers] = useState<PartnershipMember[]>([])
   const [pilotId, setPilotId] = useState('')
+  const [otherPilot, setOtherPilot] = useState<string | null>(null)
 
   // Squawk toggle
   const [reportSquawk, setReportSquawk]     = useState(false)
@@ -57,6 +61,45 @@ export function LogFlight() {
   const [ocrResult, setOcrResult]     = useState<TachOcrResult | null>(null)
   const [ocrImageKey, setOcrImageKey] = useState<string | null>(null)
 
+  // Garmin data logs uploaded while logging: suggest meter values, attach to the flight on save.
+  const garminInputRef = useRef<HTMLInputElement>(null)
+  const { upload: uploadGarmin, busy: garminBusy } = useGarminUpload()
+  const [garminLogs, setGarminLogs] = useState<GarminLog[]>([])
+  const [garminMsg, setGarminMsg] = useState('')
+
+  async function handleGarminSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    if (!files.length) return
+    setGarminMsg('')
+    try {
+      const results = await uploadGarmin(files, { hold: true })
+      const logs = results.filter(r => r.log && (r.status === 'unmatched' || r.status === 'duplicate')).map(r => r.log!)
+      const { errors } = describeResults(results)
+      const taken = results.filter(r => r.status === 'duplicate' && r.log?.flight_id).length
+      setGarminLogs(prev => [...prev, ...logs.filter(l => !l.flight_id && !prev.some(p => p.id === l.id))]
+        .sort((a, b) => a.started_at.localeCompare(b.started_at)))
+      setGarminMsg([...errors, taken ? `${taken} file${taken > 1 ? 's are' : ' is'} already attached to another flight` : ''].filter(Boolean).join(' · '))
+    } catch (err) {
+      setGarminMsg(err instanceof Error ? err.message : 'Upload failed')
+    }
+  }
+
+  // Engine run time → Hobbs, airborne time → Flight timer; also date and route when blank.
+  function applyGarmin() {
+    if (!garminLogs.length) return
+    const engine = garminLogs.reduce((s, l) => s + (l.engine_hrs ?? 0), 0)
+    const air = garminLogs.reduce((s, l) => s + (l.air_hrs ?? 0), 0)
+    if (tachStart) setTachEnd((parseFloat(tachStart) + engine).toFixed(1))
+    if (hobbsStart) setHobbsEnd((parseFloat(hobbsStart) + air).toFixed(1))
+    const first = garminLogs[0]
+    setFlightDate(new Date(first.engine_on_at ?? first.started_at).toLocaleDateString('en-CA'))
+    if (!route.trim()) {
+      const stops = [first.origin, ...garminLogs.map(l => l.destination)].filter(Boolean) as string[]
+      setRoute(stops.filter((a, i) => i === 0 || a !== stops[i - 1]).join('-'))
+    }
+  }
+
   useEffect(() => {
     api.get<Flight[]>('/flights?limit=1').then(async ([last]) => {
       if (last) {
@@ -70,7 +113,7 @@ export function LogFlight() {
       if (p.baseline_flight != null) setHobbsStart(p.baseline_flight.toFixed(1))
     }).catch(() => {})
     api.get<CurrencyStatus>('/currency').then(setCurrency).catch(() => {})
-    api.get<Squawk[]>('/squawks?status=open').then(setOpenSquawks).catch(() => {})
+    api.get<Squawk[]>('/squawks?status=unresolved').then(setOpenSquawks).catch(() => {})
     api.get<{ ocrEnabled: boolean }>('/config').then(c => setOcrEnabled(c.ocrEnabled)).catch(() => {})
     api.get<PartnershipMember[]>('/schedule/members').then(ms => {
       setMembers(ms)
@@ -88,7 +131,7 @@ export function LogFlight() {
     setOcrResult(null)
     try {
       const fd = new FormData()
-      fd.append('photo', file)
+      fd.append('photo', await shrinkImage(file))
       const result = await api.upload<TachOcrResult>('/flights/ocr-photo', fd)
       setOcrResult(result)
       setOcrImageKey(result.image_key)
@@ -143,7 +186,7 @@ export function LogFlight() {
     }
     setSubmitting(true)
     try {
-      await api.post<Flight>('/flights', {
+      const created = await api.post<Flight>('/flights', {
         flight_date: flightDate,
         route: route || undefined,
         tach_start: parseFloat(tachStart),
@@ -157,8 +200,12 @@ export function LogFlight() {
         notes: notes || undefined,
         ocr_source_image_key: ocrImageKey || undefined,
         pilot_id: pilotId || undefined,
+        pilot_name: otherPilot?.trim() || undefined,
         exclude_from_allotment: excludeFromAllotment,
       })
+      for (const l of garminLogs) {
+        await api.post(`/garmin/${l.id}/attach`, { flight_id: created.id }).catch(() => {})
+      }
       if (reportSquawk && squawkDesc.trim()) {
         await api.post<Squawk>('/squawks', {
           description: squawkDesc.trim(),
@@ -224,20 +271,7 @@ export function LogFlight() {
         </Field>
 
         {/* Pilot */}
-        {members.length > 1 && (
-          <div className="space-y-1.5">
-            <Label>Pilot</Label>
-            <select
-              value={pilotId}
-              onChange={e => setPilotId(e.target.value)}
-              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
-            >
-              {members.map(m => (
-                <option key={m.id} value={m.id}>{m.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        <PilotPicker members={members} pilotId={pilotId} setPilotId={setPilotId} otherName={otherPilot} setOtherName={setOtherPilot} />
 
         {/* Route */}
         <Field label={<>Route <span className="font-normal text-muted-foreground">(optional)</span></>}>
@@ -248,6 +282,42 @@ export function LogFlight() {
             placeholder="KPAO – KSBA – KPAO"
           />
         </Field>
+
+        {/* Garmin data */}
+        <div className="rounded-md border p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">Garmin data <span className="font-normal text-muted-foreground">(optional)</span></p>
+            <button
+              type="button"
+              onClick={() => garminInputRef.current?.click()}
+              disabled={garminBusy}
+              className="flex items-center gap-1 rounded-md p-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              <Upload className="h-3.5 w-3.5" /> {garminBusy ? 'Reading…' : 'Upload CSV'}
+            </button>
+            <input ref={garminInputRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={handleGarminSelect} />
+          </div>
+          {garminLogs.length === 0 ? (
+            <p className="mt-1 text-xs text-muted-foreground">“Original CSV” from flyGarmin, one per engine start. Fills in times and attaches the engine data to this flight.</p>
+          ) : (
+            <div className="mt-2 space-y-2">
+              <p className="text-xs">{garminLogs.length} log{garminLogs.length > 1 ? 's' : ''}: {garminSummary(garminLogs)}</p>
+              <ul className="space-y-0.5 text-xs text-muted-foreground">
+                {garminLogs.map(l => (
+                  <li key={l.id} className="flex items-center gap-2 tabular-nums">
+                    <span>{l.origin ?? '?'} → {l.destination ?? '?'} · {new Date(l.engine_on_at ?? l.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · {l.engine_hrs?.toFixed(1)} engine / {l.air_hrs?.toFixed(1)} air</span>
+                    <button type="button" onClick={() => setGarminLogs(g => g.filter(x => x.id !== l.id))} className="ml-auto hover:text-destructive">Remove</button>
+                  </li>
+                ))}
+              </ul>
+              <Button type="button" size="sm" variant="outline" onClick={applyGarmin}>
+                Fill in date, route &amp; end times
+              </Button>
+              <p className="text-[11px] text-muted-foreground">Hobbs end = start + engine time, Flight end = start + airborne time. Check against the meters.</p>
+            </div>
+          )}
+          {garminMsg && <p className="mt-1 text-xs text-destructive">{garminMsg}</p>}
+        </div>
 
         {/* Hobbs (primary) */}
         <div>

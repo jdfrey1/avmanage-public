@@ -40,19 +40,74 @@ export interface Flight {
   notes: string | null
   route: string | null
   pilot_id: string
+  // Who flew it; differs from member_name when someone outside the partnership flew it.
   pilot_name: string
+  member_name: string
+  other_pilot: string | null
   created_at: string
   ocr_source_image_key: string | null
   oil_added_quarts?: string | null
   fuel_added_gallons?: string | null
-  fa_id?: string | null
-  fa_off_time?: string | null
-  fa_on_time?: string | null
-  fa_en_route_min?: number | null
-  fa_origin?: string | null
-  fa_destination?: string | null
-  fa_url?: string | null
-  fa_has_track?: boolean | null
+  fa_tracks?: FlightAwareTrack[]
+  garmin_logs?: GarminLog[]
+}
+
+// A Garmin avionics data log (one engine run). Times are ISO strings.
+export interface GarminCruise {
+  minutes: number; cht: (number | null)[]; egt: (number | null)[]; oilt: number | null; oilp: number | null
+  ff: number | null; map: number | null; rpm: number | null; pwr: number | null; tas: number | null; alt: number | null; oat: number | null
+}
+export interface GarminStats {
+  cht_max: (number | null)[]; egt_max: (number | null)[]; oilt_max: number | null; oilp_min: number | null; oilp_max: number | null
+  alt_max: number | null; gs_max: number | null; tas_max: number | null; volt_min: number | null; cruise: GarminCruise | null
+  events?: GarminEvent[]
+}
+export interface GarminEvent { type: string; severity: 'warning' | 'caution' | 'info'; msg: string; at: string; cyl?: number; value?: number }
+export interface EngineFinding {
+  key: string
+  ack?: { note: string | null; acked_at: string; acked_by_name: string | null }
+  kind: 'limit' | 'event' | 'outlier' | 'trend'; severity: 'warning' | 'caution' | 'info'
+  title: string; detail: string | null; log_id: string; at: string; metric: string
+}
+export type DashboardFinding = EngineFinding & { run: { started_at: string; origin: string | null; destination: string | null; pilot_name: string | null } | null }
+export interface EngineTrendsResponse {
+  runs: GarminTrendPoint[]; findings: EngineFinding[]; addressed: EngineFinding[]; marks: Record<string, string[]>
+  history: { cruise_runs: number; outliers_from: number; trends_from: number }
+}
+export interface GarminLog {
+  id: string
+  flight_id?: string | null
+  filename?: string | null
+  started_at: string
+  ended_at?: string
+  engine_on_at: string | null
+  engine_off_at: string | null
+  takeoff_at: string | null
+  landing_at: string | null
+  engine_hrs: number | null
+  air_hrs: number | null
+  fuel_used_gal: number | null
+  origin: string | null
+  destination: string | null
+  max_cht: number | null
+  max_cht_cyl: number | null
+  stats: GarminStats
+}
+export interface GarminTrendPoint extends GarminLog { flight_date: string | null; pilot_name: string | null }
+// Chart data sampled every `step` seconds; t = seconds from t0 (epoch ms). Missing columns are absent.
+export type GarminSeries = { t0: number; step: number; t: number[] } & Partial<Record<string, (number | null)[]>>
+export interface GarminUploadResult { filename: string; status: 'attached' | 'unmatched' | 'duplicate' | 'error'; error?: string; log?: GarminLog }
+
+// A FlightAware flight (one leg) attached to a logged flight.
+export interface FlightAwareTrack {
+  id: string
+  off_time: string | null
+  on_time: string | null
+  en_route_min: number | null
+  origin: string | null
+  destination: string | null
+  url: string | null
+  has_track: boolean
 }
 
 export interface FlightAwareUnmatched {
@@ -92,6 +147,8 @@ export interface ScheduleBlock {
   created_at: string
   created_by: string
   created_by_name: string
+  day_over?: boolean
+  flights_logged?: { pilot: string; count: number }[] | null
 }
 
 export interface PartnershipMember {
@@ -176,7 +233,7 @@ export interface Squawk {
   id: string
   description: string
   severity: 'major' | 'minor' | 'note'
-  status: 'open' | 'resolved'
+  status: 'open' | 'in_progress' | 'resolved'
   tach_at_report: string | null
   reported_by_name: string
   resolution_notes: string | null

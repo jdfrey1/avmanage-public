@@ -22,7 +22,7 @@ async function getPartnershipId(userId) {
 }
 
 const VALID_SEVERITIES = ['major', 'minor', 'note'];
-const VALID_STATUSES   = ['open', 'resolved'];
+const VALID_STATUSES   = ['open', 'in_progress', 'resolved'];
 
 router.get('/', async (req, res) => {
   try {
@@ -32,7 +32,10 @@ router.get('/', async (req, res) => {
     const conditions = ['s.partnership_id = $1'];
     const params = [partnershipId];
 
-    if (status && VALID_STATUSES.includes(status)) {
+    // 'unresolved' = open or planned — anything still wrong with the aircraft.
+    if (status === 'unresolved') {
+      conditions.push(`s.status <> 'resolved'`);
+    } else if (status && VALID_STATUSES.includes(status)) {
       params.push(status);
       conditions.push(`s.status = $${params.length}`);
     }
@@ -47,7 +50,7 @@ router.get('/', async (req, res) => {
       JOIN users u ON u.id = s.reported_by
       WHERE ${conditions.join(' AND ')}
       ORDER BY
-        CASE s.status WHEN 'open' THEN 0 ELSE 1 END,
+        CASE s.status WHEN 'open' THEN 0 WHEN 'in_progress' THEN 1 ELSE 2 END,
         s.reported_at DESC
     `, params);
 
@@ -131,7 +134,8 @@ router.patch('/:id', async (req, res) => {
     if (resolution_notes !== undefined) { params.push(resolution_notes); sets.push(`resolution_notes = $${params.length}`); }
     if (status !== undefined) {
       params.push(status); sets.push(`status = $${params.length}`);
-      if (status === 'resolved') sets.push(`resolved_at = NOW()`);
+      // Keep the original resolved date when a resolved squawk is saved again.
+      if (status === 'resolved') sets.push(`resolved_at = CASE WHEN status = 'resolved' THEN resolved_at ELSE NOW() END`);
       else sets.push(`resolved_at = NULL`);
     }
 

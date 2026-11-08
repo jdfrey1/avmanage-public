@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Select } from '@/components/ui/select'
 import cronstrue from 'cronstrue'
 import { backupApi, type BackupFile, type BackupSettings, type BackupVerifyResult } from '@/lib/api'
 import { ShieldCheck } from 'lucide-react'
@@ -227,7 +228,7 @@ export function BackupPage() {
             <p className="text-xs text-muted-foreground">{cronDescription(cronInput)}</p>
           </div>
           <div className="space-y-1">
-            <select
+            <Select
               value={settings.maxBackups}
               onChange={e => setSettings(s => ({ ...s, maxBackups: parseInt(e.target.value) }))}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -235,7 +236,7 @@ export function BackupPage() {
               {MAX_OPTIONS.map(n => (
                 <option key={n} value={n}>{n} backup{n !== 1 ? 's' : ''}</option>
               ))}
-            </select>
+            </Select>
             <p className="text-xs text-muted-foreground">Max backups to keep (oldest deleted when exceeded)</p>
           </div>
         </div>
@@ -254,7 +255,7 @@ export function BackupPage() {
         ) : (
           <div className="space-y-2">
             {/* Dropdown */}
-            <select
+            <Select
               value={selectedIdx}
               onChange={e => setSelectedIdx(parseInt(e.target.value))}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
@@ -264,7 +265,7 @@ export function BackupPage() {
                   {b.filename} · {b.size_label} · {formatDate(b.created_at)}
                 </option>
               ))}
-            </select>
+            </Select>
 
             {/* Meta row + action icons */}
             {selected && (

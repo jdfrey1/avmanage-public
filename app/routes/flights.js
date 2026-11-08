@@ -8,6 +8,7 @@ const pool = require('../db');
 const requireAuth = require('../middleware/requireAuth');
 const googleCalendar = require('../services/googleCalendar');
 const googleDrive = require('../services/googleDrive');
+const garminMatch = require('../services/garminMatch');
 const googleAuth = require('../services/googleAuth');
 const reports = require('../services/reports');
 const leaseBilling = require('../services/leaseBilling');
@@ -35,7 +36,7 @@ async function syncFlightToGoogle(flightId) {
     if (!(await googleCalendar.isConnected())) return;
     const { rows: [f] } = await pool.query(
       `SELECT f.id, TO_CHAR(f.flight_date, 'YYYY-MM-DD') AS flight_date, f.route, f.flight_time,
-              f.notes, f.google_event_id, u.name AS pilot_name
+              f.notes, f.google_event_id, COALESCE(f.pilot_name, u.name) AS pilot_name
        FROM flights f JOIN users u ON u.id = f.pilot_id
        WHERE f.id = $1`,
       [flightId]
@@ -107,12 +108,25 @@ router.get('/', async (req, res) => {
         f.tach_start, f.tach_end, f.tach_time,
         f.hobbs_start, f.hobbs_end, f.flight_time, f.exclude_from_allotment, f.fuel_gallons, f.tks_gallons, f.oil_added_quarts, f.fuel_added_gallons,
         f.fuel_standard_met, f.notes, f.route, f.created_at,
-        f.pilot_id, u.name AS pilot_name, f.ocr_source_image_key,
-        ff.id AS fa_id, ff.off_time AS fa_off_time, ff.on_time AS fa_on_time, ff.en_route_min AS fa_en_route_min,
-        ff.origin AS fa_origin, ff.destination AS fa_destination, ff.url AS fa_url, (ff.track IS NOT NULL) AS fa_has_track
+        f.pilot_id, COALESCE(f.pilot_name, u.name) AS pilot_name, u.name AS member_name, f.pilot_name AS other_pilot, f.ocr_source_image_key,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', ff.id, 'off_time', ff.off_time, 'on_time', ff.on_time, 'en_route_min', ff.en_route_min,
+            'origin', ff.origin, 'destination', ff.destination, 'url', ff.url, 'has_track', ff.track IS NOT NULL
+          ) ORDER BY ff.off_time)
+          FROM flightaware_flights ff WHERE ff.flight_id = f.id
+        ), '[]'::json) AS fa_tracks,
+        COALESCE((
+          SELECT json_agg(json_build_object(
+            'id', g.id, 'started_at', g.started_at, 'engine_on_at', g.engine_on_at, 'engine_off_at', g.engine_off_at,
+            'takeoff_at', g.takeoff_at, 'landing_at', g.landing_at, 'engine_hrs', g.engine_hrs, 'air_hrs', g.air_hrs,
+            'fuel_used_gal', g.fuel_used_gal, 'origin', g.origin, 'destination', g.destination,
+            'max_cht', g.max_cht, 'max_cht_cyl', g.max_cht_cyl, 'stats', g.stats
+          ) ORDER BY g.started_at)
+          FROM garmin_data_logs g WHERE g.flight_id = f.id
+        ), '[]'::json) AS garmin_logs
       FROM flights f
       JOIN users u ON u.id = f.pilot_id
-      LEFT JOIN flightaware_flights ff ON ff.flight_id = f.id
       WHERE ${conditions.join(' AND ')}
       ORDER BY ${sortCol} ${sortDir} NULLS LAST, f.tach_start DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
@@ -137,7 +151,7 @@ router.post('/ocr-photo', upload.single('photo'), async (req, res) => {
 
     const base64 = req.file.buffer.toString('base64');
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-8',
+      model: 'claude-sonnet-5-5',
       max_tokens: 256,
       messages: [{
         role: 'user',
@@ -201,7 +215,7 @@ router.post('/', async (req, res) => {
       fuel_gallons, tks_gallons, fuel_standard_met,
       oil_added_quarts, fuel_added_gallons,
       notes, route,
-      pilot_id, ocr_source_image_key, exclude_from_allotment,
+      pilot_id, pilot_name, ocr_source_image_key, exclude_from_allotment,
     } = req.body;
 
     if (!flight_date || tach_start == null || tach_end == null) {
@@ -221,8 +235,8 @@ router.post('/', async (req, res) => {
         hobbs_start, hobbs_end,
         fuel_gallons, tks_gallons, fuel_standard_met,
         notes, route, ocr_source_image_key, exclude_from_allotment,
-        oil_added_quarts, fuel_added_gallons
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        oil_added_quarts, fuel_added_gallons, pilot_name
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING
         id, TO_CHAR(flight_date, 'YYYY-MM-DD') AS flight_date,
         tach_start, tach_end, tach_time,
@@ -234,13 +248,15 @@ router.post('/', async (req, res) => {
       hobbs_start || null, hobbs_end || null,
       fuel_gallons || null, tks_gallons || 0, fuel_standard_met ?? null,
       notes || null, route || null, ocr_source_image_key || null, exclude,
-      oil_added_quarts || null, fuel_added_gallons || null,
+      oil_added_quarts || null, fuel_added_gallons || null, pilot_name?.trim() || null,
     ]);
 
     await syncFlightToGoogle(flight.id);
     leaseBilling.syncExcessHoursSoon(partnershipId);
     require('../services/flightaware').matchFlights().catch(() => {});
 
+    // Garmin logs uploaded before this flight was logged can match it now.
+    garminMatch.matchUnattached(partnershipId).catch(err => console.error('Garmin match failed:', err.message));
     res.status(201).json(flight);
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -281,7 +297,7 @@ router.get('/:id', async (req, res) => {
         f.tach_start, f.tach_end, f.tach_time,
         f.hobbs_start, f.hobbs_end, f.flight_time, f.exclude_from_allotment, f.fuel_gallons, f.tks_gallons, f.oil_added_quarts, f.fuel_added_gallons,
         f.fuel_standard_met, f.notes, f.route, f.created_at,
-        f.pilot_id, u.name AS pilot_name, f.ocr_source_image_key
+        f.pilot_id, COALESCE(f.pilot_name, u.name) AS pilot_name, u.name AS member_name, f.pilot_name AS other_pilot, f.ocr_source_image_key
       FROM flights f
       JOIN users u ON u.id = f.pilot_id
       WHERE f.id = $1 AND f.partnership_id = $2
@@ -315,9 +331,10 @@ router.patch('/:id', async (req, res) => {
       'flight_date', 'tach_start', 'tach_end',
       'hobbs_start', 'hobbs_end',
       'fuel_gallons', 'tks_gallons', 'fuel_standard_met',
-      'notes', 'route', 'pilot_id', 'ocr_source_image_key', 'exclude_from_allotment',
+      'notes', 'route', 'pilot_id', 'pilot_name', 'ocr_source_image_key', 'exclude_from_allotment',
       'oil_added_quarts', 'fuel_added_gallons',
     ];
+    if ('pilot_name' in req.body) req.body.pilot_name = req.body.pilot_name?.trim() || null;
     const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
     if (updates.length === 0) {
       return res.status(400).json({ error: 'No valid fields to update' });
@@ -346,6 +363,9 @@ router.patch('/:id', async (req, res) => {
 
     await syncFlightToGoogle(req.params.id);
     leaseBilling.syncExcessHoursSoon(partnershipId);
+    if ('flight_date' in req.body || 'route' in req.body) {
+      garminMatch.matchUnattached(partnershipId).catch(err => console.error('Garmin match failed:', err.message));
+    }
 
     res.json(flight);
   } catch (err) {

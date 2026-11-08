@@ -28,6 +28,7 @@ const { initCron }       = require('./services/backupCron');
 const { initCron: initReportCron } = require('./services/reportCron');
 const { initCron: initLeaseBilling } = require('./services/leaseBilling');
 const { initCron: initFlightAware } = require('./services/flightaware');
+const { initCron: initForeflightEmail } = require('./services/foreflightEmail');
 
 const app = express();
 const port = process.env.PORT || 3022;
@@ -67,6 +68,7 @@ app.use('/api/logbook',      logbookRouter);
 app.use('/api/documents',    documentsRouter);
 app.use('/api/reports',      reportsRouter);
 app.use('/api/flightaware',  flightawareRouter);
+app.use('/api/garmin',       require('./routes/garmin'));
 app.use('/api/invoices',     invoicesRouter);
 
 app.get('/api/config', requireAuth, (req, res) => {
@@ -109,6 +111,8 @@ migrate()
       initReportCron();
       initLeaseBilling();
       initFlightAware();
+      initForeflightEmail();
+      require('./services/engineAnalysis').reparseStale().catch(err => console.error('[garmin] re-parse failed:', err.message));
     });
   })
   .catch(err => {
