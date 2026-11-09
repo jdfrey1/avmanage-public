@@ -29,6 +29,7 @@ const { initCron: initReportCron } = require('./services/reportCron');
 const { initCron: initLeaseBilling } = require('./services/leaseBilling');
 const { initCron: initFlightAware } = require('./services/flightaware');
 const { initCron: initForeflightEmail } = require('./services/foreflightEmail');
+const { initCron: initNotifications } = require('./services/notifications');
 
 const app = express();
 const port = process.env.PORT || 3022;
@@ -70,6 +71,7 @@ app.use('/api/reports',      reportsRouter);
 app.use('/api/flightaware',  flightawareRouter);
 app.use('/api/garmin',       require('./routes/garmin'));
 app.use('/api/invoices',     invoicesRouter);
+app.use('/api/notifications', require('./routes/notifications'));
 
 app.get('/api/config', requireAuth, (req, res) => {
   res.json({ ocrEnabled: !!process.env.ANTHROPIC_API_KEY });
@@ -112,6 +114,7 @@ migrate()
       initLeaseBilling();
       initFlightAware();
       initForeflightEmail();
+      initNotifications();
       require('./services/engineAnalysis').reparseStale().catch(err => console.error('[garmin] re-parse failed:', err.message));
     });
   })

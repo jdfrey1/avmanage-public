@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Plus, PlaneTakeoff, Download, Camera, X, Pencil, ChevronDown } from 'lucide-react'
 import { api, type Flight } from '@/lib/api'
-import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { FlightAwareInfo, UnmatchedFlightAware } from '@/components/FlightAwareInfo'
 import { GarminDataEmpty, GarminDataInfo, UnmatchedGarmin } from '@/components/GarminData'
 import { cn } from '@/lib/utils'
+import { useMemberColors } from '@/lib/memberColors'
 
 function formatDate(iso: string) {
   return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', {
@@ -30,7 +30,6 @@ type Filter = 'all' | string
 type SortBy = 'date' | 'pilot' | 'route' | 'notes'
 
 export function Flights() {
-  const { user } = useAuth()
   const navigate = useNavigate()
   const [flights, setFlights] = useState<Flight[]>([])
   const [filter, setFilter] = useState<Filter>('all')
@@ -235,7 +234,7 @@ export function Flights() {
               </p>
               <div className="space-y-2">
                 {dayFlights.map(f => (
-                  <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} onChange={() => setReloadKey(k => k + 1)} />
+                  <FlightCard key={f.id} flight={f} onChange={() => setReloadKey(k => k + 1)} />
                 ))}
               </div>
             </div>
@@ -243,7 +242,7 @@ export function Flights() {
         ) : (
           <div className="space-y-2">
             {filteredFlights.map(f => (
-              <FlightCard key={f.id} flight={f} isSelf={f.pilot_id === user?.id} showDate onChange={() => setReloadKey(k => k + 1)} />
+              <FlightCard key={f.id} flight={f} showDate onChange={() => setReloadKey(k => k + 1)} />
             ))}
           </div>
         )}
@@ -266,9 +265,10 @@ function FilterTab({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-function FlightCard({ flight: f, isSelf, showDate, onChange }: { flight: Flight; isSelf: boolean; showDate?: boolean; onChange: () => void }) {
+function FlightCard({ flight: f, showDate, onChange }: { flight: Flight; showDate?: boolean; onChange: () => void }) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
+  const colorOf = useMemberColors()
   const tachTime = parseFloat(f.tach_time).toFixed(1)
   const hobbsTime = f.hobbs_start && f.hobbs_end
     ? (parseFloat(f.hobbs_end) - parseFloat(f.hobbs_start)).toFixed(1)
@@ -320,7 +320,7 @@ function FlightCard({ flight: f, isSelf, showDate, onChange }: { flight: Flight;
             <Pencil className="h-4 w-4" />
           </button>
           {f.exclude_from_allotment && <Badge variant="outline">Excluded</Badge>}
-          <Badge variant={isSelf ? 'default' : 'secondary'}>
+          <Badge className={colorOf(f.pilot_id).pill}>
             {f.other_pilot ? `${f.other_pilot} → ${f.member_name.split(' ')[0]}` : f.pilot_name.split(' ')[0]}
           </Badge>
           <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />

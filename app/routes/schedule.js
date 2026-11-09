@@ -106,7 +106,7 @@ router.get('/members', async (req, res) => {
   try {
     const partnershipId = await getPartnershipId(req.session.userId);
     const { rows } = await pool.query(
-      `SELECT u.id, u.id AS user_id, u.name, pm.role FROM users u
+      `SELECT u.id, u.id AS user_id, u.name, pm.role, pm.color FROM users u
        JOIN partnership_members pm ON pm.user_id = u.id
        WHERE pm.partnership_id = $1 ORDER BY u.name`,
       [partnershipId]

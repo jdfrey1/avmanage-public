@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api, profileApi, type Partnership, type CurrencyStatus } from '@/lib/api'
 import { BackupPage } from './BackupPage'
-import { ReportsSettings } from './ReportsSettings'
+import { ReportsSettings, MyCurrencyAlerts } from './ReportsSettings'
 import { MembersManager } from './MembersManager'
 import { FlightAwareSettings } from './FlightAwareSettings'
 import { useAuth } from '@/context/AuthContext'
@@ -11,6 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { CurrencyEntries } from '@/components/CurrencyEntries'
+import { NotificationSettings } from '@/components/NotificationSettings'
 
 function ChevronDown({ className }: { className?: string }) {
   return (
@@ -52,7 +53,7 @@ export function Settings() {
   const [error, setError] = useState('')
 
   // /settings?open=account opens that section (the Dashboard currency card links here)
-  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set<string>(new URLSearchParams(window.location.search).getAll('open')))
+  const [openSections, setOpenSections] = useState<Set<string>>(() => new Set<string>(new URLSearchParams(window.location.search).getAll('open').map(o => o === 'notifications' ? 'email' : o)))
   const toggleSection = (id: string) =>
     setOpenSections(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
@@ -424,6 +425,11 @@ export function Settings() {
             </div>
           </AccordionSection>
 
+          {/* ── Email & Reports: personal emails, then partnership-wide ones ── */}
+          <AccordionSection id="email" label="Email & Reports" open={openSections.has('email')} onToggle={toggleSection}>
+            <EmailAndReports canEdit={user?.role === 'owner' || !!user?.is_admin} />
+          </AccordionSection>
+
           {/* ── Members ── */}
           {(user?.role === 'owner' || user?.is_admin) && (
             <AccordionSection id="members" label="Members" open={openSections.has('members')} onToggle={toggleSection}>
@@ -525,10 +531,6 @@ export function Settings() {
               )}
             </div>
 
-            {/* Reports & Alerts */}
-            <div className="border-t pt-4">
-              <ReportsSettings />
-            </div>
           </AccordionSection>
         </div>
 
@@ -649,6 +651,30 @@ function AircraftImage() {
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
       <p className="text-xs text-muted-foreground">Shown on the sign-in screen and the dashboard.</p>
+    </div>
+  )
+}
+
+function EmailAndReports({ canEdit }: { canEdit: boolean }) {
+  return (
+    <div className="space-y-6">
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">My emails</p>
+          <p className="text-xs text-muted-foreground">Just for you: what’s coming up and what’s changed.</p>
+        </div>
+        <NotificationSettings />
+        <div className="border-t pt-4">
+          <MyCurrencyAlerts />
+        </div>
+      </div>
+      <div className="space-y-4 border-t pt-5">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Partnership emails</p>
+          <p className="text-xs text-muted-foreground">Set once for everyone.</p>
+        </div>
+        <ReportsSettings canEdit={canEdit} />
+      </div>
     </div>
   )
 }

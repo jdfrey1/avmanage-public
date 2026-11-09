@@ -10,7 +10,6 @@ const googleAuth = require('./googleAuth');
 const ALERT_THRESHOLDS = [7, 1];
 
 let monthlyTask = null;
-let currencyCheckTask = null;
 
 // Settings are set by reports.js route after it loads (avoids circular require, same pattern
 // as backupCron's setRunBackup).
@@ -28,7 +27,6 @@ function restartCron(settings) {
 
 function _applySettings(settings) {
   if (monthlyTask) { monthlyTask.stop(); monthlyTask = null; }
-  if (currencyCheckTask) { currencyCheckTask.stop(); currencyCheckTask = null; }
 
   if (settings.monthlyEnabled && settings.monthlyCron) {
     if (!cron.validate(settings.monthlyCron)) {
@@ -40,18 +38,6 @@ function _applySettings(settings) {
         catch (err) { console.error('[report-cron] Monthly report failed:', err.message); }
       });
       console.log(`[report-cron] Monthly report scheduled: ${settings.monthlyCron}`);
-    }
-  }
-
-  if (settings.currencyCheckEnabled && settings.currencyCheckCron) {
-    if (!cron.validate(settings.currencyCheckCron)) {
-      console.warn(`[report-cron] Invalid currency-check cron expression: ${settings.currencyCheckCron}`);
-    } else {
-      currencyCheckTask = cron.schedule(settings.currencyCheckCron, async () => {
-        try { await runCurrencyCheck(); }
-        catch (err) { console.error('[report-cron] Currency check failed:', err.message); }
-      });
-      console.log(`[report-cron] Currency check scheduled: ${settings.currencyCheckCron}`);
     }
   }
 }
@@ -119,31 +105,43 @@ async function runMonthlyReport(overrideRecipients = null) {
 
 // Each pilot is only alerted about their own currency, and only if they've opted in — a
 // partner's expiring medical/BFR/landing currency isn't the rest of the partnership's business
-// by default (see users.currency_alerts_enabled).
-async function runCurrencyCheck() {
-  if (!(await googleAuth.isConnected())) return;
-  const partnershipId = await getPartnershipId();
-  if (!partnershipId) return;
-  const recipients = await getRecipients(partnershipId);
-  if (recipients.length === 0) return;
+// (see users.currency_alerts_enabled). Each member picks the time (users.currency_alert_time);
+// the check runs once per local day after that time (called every few minutes).
+async function checkCurrencyFor(pilot) {
+  const status = await reports.getCurrencyStatus(pilot.id);
+  const checks = [
+    ['IFR currency', status.ifr],
+    ['Day landing currency', status.dayLanding],
+    ['Night landing currency', status.nightLanding],
+    ['Medical', status.medical],
+    ['BFR', status.bfr],
+  ];
+  const triggered = checks
+    .map(([label, s]) => ({ label, days: s.expiresInDays ?? s.daysUntilExpiry, current: s.current }))
+    .filter(c => c.current && ALERT_THRESHOLDS.includes(c.days));
+  if (triggered.length === 0) return false;
+  const { subject, html } = currencyAlertEmail(pilot.name, triggered);
+  await googleMail.sendMail({ to: pilot.email, subject, html });
+  return true;
+}
 
-  for (const pilot of recipients) {
-    if (!pilot.currency_alerts_enabled) continue;
-    const status = await reports.getCurrencyStatus(pilot.id);
-    const checks = [
-      ['IFR currency', status.ifr],
-      ['Day landing currency', status.dayLanding],
-      ['Night landing currency', status.nightLanding],
-      ['Medical', status.medical],
-      ['BFR', status.bfr],
-    ];
-    const triggered = checks
-      .map(([label, s]) => ({ label, days: s.expiresInDays ?? s.daysUntilExpiry, current: s.current }))
-      .filter(c => c.current && ALERT_THRESHOLDS.includes(c.days));
-    if (triggered.length === 0) continue;
-
-    const { subject, html } = currencyAlertEmail(pilot.name, triggered);
-    await googleMail.sendMail({ to: pilot.email, subject, html });
+// now: { date: 'YYYY-MM-DD', hhmm: 'HH:MM' } in the app time zone.
+async function runDueCurrencyChecks(now) {
+  const { rows } = await pool.query(
+    `SELECT u.id, u.email, u.name FROM users u
+     WHERE u.currency_alerts_enabled AND u.currency_alert_time <= $2
+       AND (u.currency_alert_last_date IS NULL OR u.currency_alert_last_date < $1::date)
+       AND EXISTS (SELECT 1 FROM partnership_members pm WHERE pm.user_id = u.id)`,
+    [now.date, now.hhmm]);
+  for (const pilot of rows) {
+    try {
+      const sent = await checkCurrencyFor(pilot);
+      if (sent) console.log(`[currency-alerts] warning sent to ${pilot.name}`);
+    } catch (err) {
+      console.error(`[currency-alerts] check for ${pilot.name} failed:`, err.message);
+      continue; // try again on the next pass
+    }
+    await pool.query('UPDATE users SET currency_alert_last_date = $2 WHERE id = $1', [pilot.id, now.date]);
   }
 }
 
@@ -174,5 +172,5 @@ async function sendTestCurrencyAlert(userId, to) {
 
 module.exports = {
   initCron, restartCron, setSettingsReader,
-  runMonthlyReport, runCurrencyCheck, sendTestCurrencyAlert,
+  runMonthlyReport, runDueCurrencyChecks, sendTestCurrencyAlert,
 };

@@ -153,6 +153,27 @@ function analyze(runs, acks = {}) {
     history: { cruise_runs: cruiseRuns.length, outliers_from: MIN_HISTORY + 1, trends_from: MIN_TREND },
   };
 }
+// Runs (newest `limit`) plus the analysis of them, with the partnership's acks applied.
+async function loadAnalysis(partnershipId, limit) {
+  const { rows } = await pool.query(
+    `SELECT g.id, g.flight_id, g.filename, g.started_at, g.engine_on_at, g.engine_off_at, g.takeoff_at, g.landing_at,
+            g.engine_hrs::float, g.air_hrs::float, g.fuel_used_gal::float, g.origin, g.destination,
+            g.max_cht::float, g.max_cht_cyl, g.stats, TO_CHAR(f.flight_date, 'YYYY-MM-DD') AS flight_date,
+            COALESCE(f.pilot_name, u.name) AS pilot_name
+     FROM garmin_data_logs g
+     LEFT JOIN flights f ON f.id = g.flight_id
+     LEFT JOIN users u ON u.id = f.pilot_id
+     WHERE g.partnership_id = $1
+     ORDER BY g.started_at DESC LIMIT $2`,
+    [partnershipId, limit]);
+  const runs = rows.reverse();
+  const { rows: ackRows } = await pool.query(
+    `SELECT a.finding_key, a.note, a.acked_at, u.name AS acked_by_name
+     FROM engine_finding_acks a LEFT JOIN users u ON u.id = a.acked_by WHERE a.partnership_id = $1`, [partnershipId]);
+  const acks = Object.fromEntries(ackRows.map(r => [r.finding_key, { note: r.note, acked_at: r.acked_at, acked_by_name: r.acked_by_name }]));
+  return { runs, ...analyze(runs, acks) };
+}
+
 // Re-parse stored logs from an older parser version (new stats/events), from the original CSVs.
 async function reparseStale() {
   const { rows } = await pool.query(
@@ -179,4 +200,4 @@ async function reparseStale() {
   return n;
 }
 
-module.exports = { analyze, reparseStale, METRICS };
+module.exports = { analyze, loadAnalysis, reparseStale, METRICS };

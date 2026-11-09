@@ -352,8 +352,8 @@ export const reportsApi = {
   getSettings: () => api.get<ReportSettings>('/reports/settings'),
   saveSettings: (s: ReportSettings) => api.post<ReportSettings>('/reports/settings', s),
   sendTest: (to?: string) => api.post<{ success: boolean }>('/reports/test', to ? { to } : {}),
-  getCurrencyAlertPref: () => api.get<{ enabled: boolean }>('/reports/currency-alert-pref'),
-  saveCurrencyAlertPref: (enabled: boolean) => api.post<{ enabled: boolean }>('/reports/currency-alert-pref', { enabled }),
+  getCurrencyAlertPref: () => api.get<{ enabled: boolean; time: string }>('/reports/currency-alert-pref'),
+  saveCurrencyAlertPref: (enabled: boolean, time?: string) => api.post<{ enabled: boolean; time: string }>('/reports/currency-alert-pref', { enabled, time }),
   sendCurrencyTest: (to?: string) => api.post<{ success: boolean }>('/reports/currency-test', to ? { to } : {}),
 }
 

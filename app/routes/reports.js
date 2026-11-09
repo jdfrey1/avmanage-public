@@ -28,13 +28,24 @@ function readSettings() {
 // Wire settings into cron service (avoids circular require, same pattern as backupCron)
 reportCron.setSettingsReader(readSettings);
 
+// Partnership-wide report settings and test sends are for the owner or an administrator.
+async function requireOwnerOrAdmin(req, res, next) {
+  try {
+    const { rows: [m] } = await pool.query(
+      `SELECT pm.role, u.is_admin FROM users u LEFT JOIN partnership_members pm ON pm.user_id = u.id WHERE u.id = $1 LIMIT 1`,
+      [req.session.userId]);
+    if (m?.role !== 'owner' && !m?.is_admin) return res.status(403).json({ error: 'Owner or administrator only' });
+    next();
+  } catch (err) { next(err); }
+}
+
 // GET /api/reports/settings
 router.get('/settings', (req, res) => {
   res.json(readSettings());
 });
 
 // POST /api/reports/settings
-router.post('/settings', (req, res) => {
+router.post('/settings', requireOwnerOrAdmin, (req, res) => {
   const { monthlyEnabled, monthlyCron, currencyCheckEnabled, currencyCheckCron } = req.body;
   const settings = {
     monthlyEnabled: !!monthlyEnabled,
@@ -51,7 +62,7 @@ router.post('/settings', (req, res) => {
 // POST /api/reports/test — send the monthly report immediately, regardless of schedule.
 // Optional { to } overrides recipients (e.g. send a preview to just yourself instead of the
 // whole partnership while the report is still being tuned).
-router.post('/test', async (req, res) => {
+router.post('/test', requireOwnerOrAdmin, async (req, res) => {
   try {
     const { to } = req.body || {};
     let overrideRecipients = null;
@@ -74,10 +85,10 @@ router.post('/test', async (req, res) => {
 router.get('/currency-alert-pref', async (req, res) => {
   try {
     const { rows: [u] } = await pool.query(
-      'SELECT currency_alerts_enabled FROM users WHERE id = $1',
+      'SELECT currency_alerts_enabled, currency_alert_time FROM users WHERE id = $1',
       [req.session.userId]
     );
-    res.json({ enabled: u.currency_alerts_enabled });
+    res.json({ enabled: u.currency_alerts_enabled, time: u.currency_alert_time });
   } catch (err) {
     console.error('[reports] GET currency-alert-pref failed:', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -88,8 +99,11 @@ router.get('/currency-alert-pref', async (req, res) => {
 router.post('/currency-alert-pref', async (req, res) => {
   try {
     const enabled = !!req.body?.enabled;
-    await pool.query('UPDATE users SET currency_alerts_enabled = $1 WHERE id = $2', [enabled, req.session.userId]);
-    res.json({ enabled });
+    const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(req.body?.time || '') ? req.body.time : null;
+    const { rows: [u] } = await pool.query(
+      'UPDATE users SET currency_alerts_enabled = $1, currency_alert_time = COALESCE($3, currency_alert_time) WHERE id = $2 RETURNING currency_alert_time',
+      [enabled, req.session.userId, time]);
+    res.json({ enabled, time: u.currency_alert_time });
   } catch (err) {
     console.error('[reports] POST currency-alert-pref failed:', err);
     res.status(500).json({ error: 'Internal server error' });

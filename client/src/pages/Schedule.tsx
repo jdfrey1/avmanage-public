@@ -3,8 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { ChevronLeft, ChevronRight, Plus, CalendarDays, Link, Download, ExternalLink } from 'lucide-react'
 import { api, type ScheduleBlock, type PartnershipMember } from '@/lib/api'
 import { AircraftStatusBanner, pastInsurance, useAircraftStatus } from '@/components/AircraftStatusBanner'
-import { useAuth } from '@/context/AuthContext'
 import { Badge } from '@/components/ui/badge'
+import { useMemberColors, DOWNTIME_DOT } from '@/lib/memberColors'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -16,14 +16,10 @@ function effectivePilotId(b: ScheduleBlock): string | null {
   return b.pilot_name ? null : (b.pilot_id ?? b.created_by)
 }
 
-function blockDotClass(b: ScheduleBlock, selfId: string | undefined) {
-  if (b.block_type === 'maintenance') return 'bg-amber-500'
-  if (b.block_type === 'unavailable') return 'bg-destructive'
-  return effectivePilotId(b) === selfId ? 'bg-primary' : 'bg-blue-400'
-}
-
-function blockPilotVariant(b: ScheduleBlock, selfId: string | undefined) {
-  return effectivePilotId(b) === selfId ? 'default' : 'secondary'
+// Reservations take the member's color; maintenance and unavailable (aircraft down) are red.
+function blockDotClass(b: ScheduleBlock, colorOf: ReturnType<typeof useMemberColors>) {
+  if (b.block_type === 'maintenance' || b.block_type === 'unavailable') return DOWNTIME_DOT
+  return colorOf(effectivePilotId(b)).dot
 }
 
 function displayName(b: ScheduleBlock, members: PartnershipMember[]): string {
@@ -68,7 +64,6 @@ function blockOverlapsDay(b: ScheduleBlock, year: number, month: number, day: nu
 
 export function Schedule() {
   const navigate = useNavigate()
-  const { user } = useAuth()
 
   const now = new Date()
   const [year, setYear]   = useState(now.getFullYear())
@@ -78,6 +73,7 @@ export function Schedule() {
     b.block_type === 'reservation' && pastInsurance(aircraftStatus, new Date(b.end_dt).toLocaleDateString('en-CA'))
   const [blocks, setBlocks]   = useState<ScheduleBlock[]>([])
   const [members, setMembers] = useState<PartnershipMember[]>([])
+  const colorOf = useMemberColors()
   const [loading, setLoading] = useState(true)
   const [error, setError]    = useState('')
   const [dayPicker, setDayPicker] = useState<{ date: string; blocks: ScheduleBlock[] } | null>(null)
@@ -257,7 +253,7 @@ export function Schedule() {
                 {dayBlocks.length > 0 && (
                   <div className="mt-0.5 flex gap-0.5">
                     {dayBlocks.slice(0, 3).map(b => (
-                      <span key={b.id} className={cn('h-1.5 w-1.5 rounded-full', blockDotClass(b, user?.id))} />
+                      <span key={b.id} className={cn('h-1.5 w-1.5 rounded-full', blockDotClass(b, colorOf))} />
                     ))}
                     {dayBlocks.length > 3 && (
                       <span className="text-[8px] text-muted-foreground">+{dayBlocks.length - 3}</span>
@@ -297,7 +293,7 @@ export function Schedule() {
                   className={cn('flex cursor-pointer items-start gap-3 rounded-md border bg-background p-2.5 transition-colors hover:bg-accent/40', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
                   onClick={() => navigate(`/schedule/${b.id}/edit`)}
                 >
-                  <Badge variant={blockPilotVariant(b, user?.id) as any} className="mt-0.5 shrink-0">
+                  <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
                     {displayName(b, members).split(' ')[0]}
                   </Badge>
                   <div className="min-w-0 flex-1">
@@ -330,7 +326,7 @@ export function Schedule() {
               className={cn('flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 hover:bg-accent/40 active:bg-accent/60 transition-colors', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
               onClick={() => navigate(`/schedule/${b.id}/edit`)}
             >
-              <Badge variant={blockPilotVariant(b, user?.id) as any} className="mt-0.5 shrink-0">
+              <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
                 {displayName(b, members).split(' ')[0]}
               </Badge>
               <div className="min-w-0 flex-1">
