@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, PlaneTakeoff, Download, Camera, X } from 'lucide-react'
+import { Plus, PlaneTakeoff, Download, Camera, X, Pencil, ChevronDown } from 'lucide-react'
 import { api, type Flight } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
 import { Button } from '@/components/ui/button'
@@ -268,80 +268,92 @@ function FilterTab({ active, onClick, children }: { active: boolean; onClick: ()
 
 function FlightCard({ flight: f, isSelf, showDate, onChange }: { flight: Flight; isSelf: boolean; showDate?: boolean; onChange: () => void }) {
   const navigate = useNavigate()
+  const [open, setOpen] = useState(false)
   const tachTime = parseFloat(f.tach_time).toFixed(1)
   const hobbsTime = f.hobbs_start && f.hobbs_end
     ? (parseFloat(f.hobbs_end) - parseFloat(f.hobbs_start)).toFixed(1)
     : null
+  const hasFuel = !!(f.oil_added_quarts || f.fuel_added_gallons || f.fuel_gallons || f.tks_gallons)
 
   return (
-    <div
-      className="rounded-lg border bg-card p-3 cursor-pointer hover:bg-accent/40 transition-colors active:bg-accent/60"
-      onClick={() => navigate(`/flights/${f.id}/edit`)}
-    >
-      {showDate && (
-        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {formatDate(f.flight_date)}
-        </p>
-      )}
-      <div className="flex items-start justify-between gap-2">
-        <div className="space-y-0.5">
-          {hobbsTime && (
-            <p className="tabular-nums text-sm font-semibold">
-              {hobbsTime} Flight hrs
-              <span className="ml-1.5 font-normal text-muted-foreground">
-                ({parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)})
-              </span>
+    <div className={cn('rounded-lg border bg-card transition-colors', open && 'ring-1 ring-border')}>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        className="flex cursor-pointer items-start gap-3 rounded-lg p-3 hover:bg-accent/40 active:bg-accent/60"
+        onClick={() => setOpen(o => !o)}
+        onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o) } }}
+      >
+        <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-4">
+          <div className="shrink-0 space-y-0.5">
+            {showDate && (
+              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatDate(f.flight_date)}</p>
+            )}
+            <p className="tabular-nums text-sm">
+              {hobbsTime && (
+                <>
+                  <span className="whitespace-nowrap font-semibold">{hobbsTime} Flight hrs</span>
+                  {' '}<span className="hidden text-muted-foreground sm:inline">({parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)})</span>
+                  {' '}<span className="mx-1 text-muted-foreground">·</span>{' '}
+                </>
+              )}
+              <span className="whitespace-nowrap"><span className={hobbsTime ? '' : 'font-semibold'}>{tachTime} Hobbs hrs</span>{f.ocr_source_image_key && <Camera className="ml-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground" />}</span>
+              {' '}<span className="hidden text-muted-foreground sm:inline">({parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)})</span>
+            </p>
+            {f.route && <p className="text-xs font-medium text-foreground/70">{f.route}</p>}
+          </div>
+          {f.notes && (
+            <p className={cn('mt-1 min-w-0 flex-1 text-sm text-muted-foreground sm:mt-0', open ? 'hidden sm:block sm:whitespace-pre-wrap' : 'line-clamp-1 sm:line-clamp-2')}>
+              {f.notes}
             </p>
           )}
-          <p className={`tabular-nums text-sm ${hobbsTime ? '' : 'font-semibold'}`}>
-            {tachTime} Hobbs hrs
-            <span className="ml-1.5 font-normal text-muted-foreground">
-              ({parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)})
-            </span>
-            {f.ocr_source_image_key && (
-              <Camera className="ml-1.5 inline h-3.5 w-3.5 text-muted-foreground" />
-            )}
-          </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            title="Edit flight"
+            aria-label="Edit flight"
+            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            onClick={e => { e.stopPropagation(); navigate(`/flights/${f.id}/edit`) }}
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
           {f.exclude_from_allotment && <Badge variant="outline">Excluded</Badge>}
           <Badge variant={isSelf ? 'default' : 'secondary'}>
             {f.other_pilot ? `${f.other_pilot} → ${f.member_name.split(' ')[0]}` : f.pilot_name.split(' ')[0]}
           </Badge>
+          <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
         </div>
       </div>
 
-      {f.route && (
-        <p className="mt-1 text-xs font-medium text-foreground/70">{f.route}</p>
-      )}
-
-      {(f.oil_added_quarts || f.fuel_added_gallons) && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {f.fuel_added_gallons && `+${parseFloat(f.fuel_added_gallons).toFixed(1)} gal fuel`}
-          {f.fuel_added_gallons && f.oil_added_quarts && ' · '}
-          {f.oil_added_quarts && `+${parseFloat(f.oil_added_quarts).toFixed(1)} qt oil`}
-        </p>
-      )}
-
-      {(f.fuel_gallons || f.tks_gallons) && (
-        <p className="mt-1 text-xs text-muted-foreground">
-          {f.fuel_gallons && `${parseFloat(f.fuel_gallons).toFixed(1)} gal`}
-          {f.tks_gallons && parseFloat(f.tks_gallons) > 0 && ` · ${parseFloat(f.tks_gallons).toFixed(1)} TKS`}
-        </p>
-      )}
-
-      {f.notes && (
-        <p className="mt-1.5 line-clamp-2 text-sm">{f.notes}</p>
-      )}
-
-      {(!!f.fa_tracks?.length || !!f.garmin_logs?.length) && (
-        <div className="mt-2 grid gap-2 md:grid-cols-2">
-          {f.fa_tracks?.length
-            ? <FlightAwareInfo tracks={f.fa_tracks} onDetached={onChange} />
-            : <div className="h-full rounded-md border border-dashed p-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">FlightAware</span> · no track</div>}
-          {f.garmin_logs?.length
-            ? <GarminDataInfo logs={f.garmin_logs} onChange={onChange} />
-            : <GarminDataEmpty flightId={f.id} onChange={onChange} />}
+      {open && (
+        <div className="space-y-2 border-t px-3 pb-3 pt-2">
+          <div className="space-y-1 sm:hidden">
+            <p className="tabular-nums text-xs text-muted-foreground">
+              {hobbsTime && <>Flight {parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)} · </>}
+              Hobbs {parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)}
+            </p>
+            {f.notes && <p className="whitespace-pre-wrap text-sm">{f.notes}</p>}
+          </div>
+          {hasFuel && (
+            <p className="text-xs text-muted-foreground">
+              {[
+                f.fuel_gallons && `${parseFloat(f.fuel_gallons).toFixed(1)} gal`,
+                f.tks_gallons && parseFloat(f.tks_gallons) > 0 && `${parseFloat(f.tks_gallons).toFixed(1)} TKS`,
+                f.fuel_added_gallons && `+${parseFloat(f.fuel_added_gallons).toFixed(1)} gal fuel added`,
+                f.oil_added_quarts && `+${parseFloat(f.oil_added_quarts).toFixed(1)} qt oil added`,
+              ].filter(Boolean).join(' · ')}
+            </p>
+          )}
+          <div className="grid gap-2 md:grid-cols-2">
+            {f.fa_tracks?.length
+              ? <FlightAwareInfo tracks={f.fa_tracks} onDetached={onChange} />
+              : <div className="h-full rounded-md border border-dashed p-2 text-xs text-muted-foreground"><span className="font-medium text-foreground">FlightAware</span> · no track</div>}
+            {f.garmin_logs?.length
+              ? <GarminDataInfo logs={f.garmin_logs} onChange={onChange} />
+              : <GarminDataEmpty flightId={f.id} onChange={onChange} />}
+          </div>
         </div>
       )}
     </div>
