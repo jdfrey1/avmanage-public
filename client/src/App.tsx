@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { AuthProvider } from './context/AuthContext'
 import { ThemeProvider } from './context/ThemeContext'
@@ -6,25 +6,27 @@ import { publicApi } from './lib/api'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
-import { ForgotPassword } from './pages/ForgotPassword'
-import { ResetPassword } from './pages/ResetPassword'
 import { Dashboard } from './pages/Dashboard'
-import { Flights } from './pages/Flights'
-import { LogFlight } from './pages/LogFlight'
-import { EditFlight } from './pages/EditFlight'
-import { Schedule } from './pages/Schedule'
-import { NewReservation } from './pages/NewReservation'
-import { EditReservation } from './pages/EditReservation'
-import { Ledger } from './pages/Ledger'
-import { NewLedgerEntry } from './pages/NewLedgerEntry'
-import { EditLedgerEntry } from './pages/EditLedgerEntry'
-import { RecurringCharges } from './pages/RecurringCharges'
-import { Invoices } from './pages/Invoices'
-import { Setup } from './pages/Setup'
-import { InvoiceDetailPage } from './pages/InvoiceDetail'
-import { MaintenancePage } from './pages/MaintenancePage'
-import { Settings } from './pages/Settings'
-import { Documents } from './pages/Documents'
+
+// Pages other than the Dashboard and Login load on first visit, keeping the initial download small.
+const LogFlight = lazy(() => import('./pages/LogFlight').then(m => ({ default: m.LogFlight })))
+const EditFlight = lazy(() => import('./pages/EditFlight').then(m => ({ default: m.EditFlight })))
+const Flights = lazy(() => import('./pages/Flights').then(m => ({ default: m.Flights })))
+const Schedule = lazy(() => import('./pages/Schedule').then(m => ({ default: m.Schedule })))
+const NewReservation = lazy(() => import('./pages/NewReservation').then(m => ({ default: m.NewReservation })))
+const EditReservation = lazy(() => import('./pages/EditReservation').then(m => ({ default: m.EditReservation })))
+const Ledger = lazy(() => import('./pages/Ledger').then(m => ({ default: m.Ledger })))
+const NewLedgerEntry = lazy(() => import('./pages/NewLedgerEntry').then(m => ({ default: m.NewLedgerEntry })))
+const EditLedgerEntry = lazy(() => import('./pages/EditLedgerEntry').then(m => ({ default: m.EditLedgerEntry })))
+const RecurringCharges = lazy(() => import('./pages/RecurringCharges').then(m => ({ default: m.RecurringCharges })))
+const Invoices = lazy(() => import('./pages/Invoices').then(m => ({ default: m.Invoices })))
+const Setup = lazy(() => import('./pages/Setup').then(m => ({ default: m.Setup })))
+const MaintenancePage = lazy(() => import('./pages/MaintenancePage').then(m => ({ default: m.MaintenancePage })))
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })))
+const Documents = lazy(() => import('./pages/Documents').then(m => ({ default: m.Documents })))
+const ForgotPassword = lazy(() => import('./pages/ForgotPassword').then(m => ({ default: m.ForgotPassword })))
+const ResetPassword = lazy(() => import('./pages/ResetPassword').then(m => ({ default: m.ResetPassword })))
+const InvoiceDetailPage = lazy(() => import('./pages/InvoiceDetail').then(m => ({ default: m.InvoiceDetailPage })))
 
 export default function App() {
   useEffect(() => {
@@ -37,6 +39,7 @@ export default function App() {
     <ThemeProvider>
     <AuthProvider>
       <BrowserRouter>
+        <Suspense fallback={<p className="p-6 text-center text-sm text-muted-foreground">Loading…</p>}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/setup" element={<Setup />} />
@@ -63,6 +66,7 @@ export default function App() {
             </Route>
           </Route>
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </AuthProvider>
     </ThemeProvider>

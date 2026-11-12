@@ -39,10 +39,31 @@ async function findDuplicate(partnershipId, log) {
   return dup || null;
 }
 
+// Garmin Pilot exports are named "2026-11-10-KBIV-8D4.csv" (local date, origin, destination);
+// SD-card logs ("log_261107_141232_KGWB.csv") are renamed to match so the Drive folder reads alike.
+function standardName(log, name) {
+  if (/^\d{4}-\d{2}-\d{2}-/.test(name)) return name;
+  const tz = process.env.APP_TIMEZONE || 'America/New_York';
+  const date = log.started_at ? log.started_at.toLocaleDateString('en-CA', { timeZone: tz }) : null;
+  const parts = [date, log.origin, log.destination].filter(Boolean).map(p => String(p).replace(/[^\w-]/g, ''));
+  return parts.length ? `${parts.join('-')}.csv` : name;
+}
+
+// Same route twice in a day → "…-KGWB-KBIV_2.csv", as Garmin Pilot numbers its own split files.
+async function uniqueName(partnershipId, name) {
+  const { rows } = await pool.query('SELECT filename FROM garmin_data_logs WHERE partnership_id = $1', [partnershipId]);
+  const taken = new Set(rows.map(r => r.filename));
+  const base = name.replace(/\.csv$/i, '');
+  let candidate = name;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${base}_${n}.csv`;
+  return candidate;
+}
+
 // log: from parseGarminLog. flightId: attach to this flight; undefined → match by date/route;
 // null → leave unattached. Returns { status: 'duplicate' | 'attached' | 'unmatched', log }.
 async function storeGarminLog({ partnershipId, userId, name, buffer, log, flightId }) {
   log = log || parseGarminLog(buffer.toString('utf8'), name);
+  name = await uniqueName(partnershipId, standardName(log, name));
   const dup = await findDuplicate(partnershipId, log);
   if (dup) return { status: 'duplicate', log: dup };
 
@@ -64,4 +85,4 @@ async function storeGarminLog({ partnershipId, userId, name, buffer, log, flight
   return { status: fid ? 'attached' : 'unmatched', log: row };
 }
 
-module.exports = { storeGarminLog, SUMMARY, UPLOADS_DIR };
+module.exports = { storeGarminLog, standardName, SUMMARY, UPLOADS_DIR };

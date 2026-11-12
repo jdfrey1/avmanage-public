@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { Sun, Moon, Monitor, LogOut, Settings } from 'lucide-react'
 import { BottomNav } from './BottomNav'
@@ -46,7 +47,10 @@ export function Layout() {
         </button>
       </header>
       <main className="flex-1 overflow-y-auto pb-20">
-        <Outlet />
+        {/* Pages load on first visit; keep the header and bottom nav up while one does. */}
+        <Suspense fallback={<p className="p-6 text-center text-sm text-muted-foreground">Loading…</p>}>
+          <Outlet />
+        </Suspense>
       </main>
       <BottomNav />
     </div>
