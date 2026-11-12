@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
-import { useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, ExternalLink, X } from 'lucide-react'
 import { api, type InvoiceDetail, type InvoiceItem, type LedgerEntry, type LogbookEntry, type PartnershipMember } from '@/lib/api'
 import { TYPE_CONFIG } from '@/lib/ledgerTypes'
@@ -58,7 +59,7 @@ function ItemRow({ item }: { item: InvoiceItem }) {
 export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const location = useLocation()
+  const goBack = useGoBack('/invoices')
   const [inv, setInv] = useState<InvoiceDetail | null>(null)
   const [error, setError] = useState('')
   const [members, setMembers] = useState<PartnershipMember[]>([])
@@ -132,7 +133,7 @@ export function InvoiceDetailPage() {
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
         <button
           // Go back to wherever the invoice was opened from (ledger, entry, list); the list only if opened directly.
-          onClick={() => (location.key !== 'default' ? navigate(-1) : navigate('/invoices'))}
+          onClick={goBack}
           className="rounded-md p-1 text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-5 w-5" />
@@ -247,7 +248,7 @@ export function InvoiceDetailPage() {
                 {lbResults.slice(0, 30).map(e => (
                   <li key={e.id} className="flex items-center gap-2 rounded border px-2 py-1.5 text-xs">
                     <span className="min-w-0 flex-1 truncate">{fmtDate(e.entry_date)} · {e.category} · {e.summary}</span>
-                    {e.invoice_id === inv.id
+                    {e.invoices?.some(x => x.id === inv.id)
                       ? <span className="text-muted-foreground">linked</span>
                       : <button className="text-primary hover:underline" onClick={() => linkLogbook(e.id)}>Link</button>}
                   </li>

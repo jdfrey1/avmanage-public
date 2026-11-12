@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, Search } from 'lucide-react'
 import { api, type InvoiceSummary } from '@/lib/api'
 import { Input } from '@/components/ui/input'
@@ -24,6 +25,7 @@ function Snippet({ html }: { html: string }) {
 
 export function Invoices() {
   const navigate = useNavigate()
+  const goBack = useGoBack('/maintenance')
   const [q, setQ] = useState('')
   const [invoices, setInvoices] = useState<InvoiceSummary[] | null>(null)
 
@@ -38,7 +40,7 @@ export function Invoices() {
   return (
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
-        <button onClick={() => navigate(-1)} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
+        <button onClick={goBack} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
           <ChevronLeft className="h-5 w-5" />
         </button>
         <div>

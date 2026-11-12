@@ -72,6 +72,7 @@ app.use('/api/flightaware',  flightawareRouter);
 app.use('/api/garmin',       require('./routes/garmin'));
 app.use('/api/invoices',     invoicesRouter);
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/oil-analysis', require('./routes/oilAnalysis'));
 
 app.get('/api/config', requireAuth, (req, res) => {
   res.json({ ocrEnabled: !!process.env.ANTHROPIC_API_KEY });

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft } from 'lucide-react'
 import { AircraftStatusBanner, InsuranceWarning, useAircraftStatus } from '@/components/AircraftStatusBanner'
 import { api, type ScheduleBlock, type PartnershipMember, type CurrencyStatus, type Squawk } from '@/lib/api'
@@ -45,7 +46,7 @@ function fmt(iso: string) {
 }
 
 export function NewReservation() {
-  const navigate = useNavigate()
+  const goBack = useGoBack('/schedule')
   const { user } = useAuth()
   const [params] = useSearchParams()
   const dateParam = params.get('date')
@@ -130,7 +131,7 @@ export function NewReservation() {
     setSubmitting(true)
     try {
       await api.post<ScheduleBlock>('/schedule', payload)
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       if (err.status === 409 && err.conflict) {
         setConflictBlock(err.conflict)
@@ -148,7 +149,7 @@ export function NewReservation() {
     setSubmitting(true)
     try {
       await api.post<ScheduleBlock>('/schedule', { ...payload, force: true })
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
       setConflictBlock(null)
@@ -164,7 +165,7 @@ export function NewReservation() {
     try {
       await api.delete(`/schedule/${conflictBlock!.id}`)
       await api.post<ScheduleBlock>('/schedule', payload)
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -178,7 +179,7 @@ export function NewReservation() {
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
         <button
-          onClick={() => navigate('/schedule')}
+          onClick={() => goBack()}
           className="rounded-md p-1 text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-5 w-5" />

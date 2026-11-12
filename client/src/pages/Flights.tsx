@@ -4,40 +4,28 @@ import { Plus, PlaneTakeoff, Download, Camera, X, Pencil, ChevronDown } from 'lu
 import { api, type Flight } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { DateTile } from '@/components/DateTile'
 import { Input } from '@/components/ui/input'
 import { FlightAwareInfo, UnmatchedFlightAware } from '@/components/FlightAwareInfo'
 import { GarminDataEmpty, GarminDataInfo, UnmatchedGarmin } from '@/components/GarminData'
 import { cn } from '@/lib/utils'
 import { useMemberColors } from '@/lib/memberColors'
-
-function formatDate(iso: string) {
-  return new Date(iso + 'T12:00:00').toLocaleDateString('en-US', {
-    weekday: 'short', month: 'short', day: 'numeric',
-  })
-}
-
-function groupByDate(flights: Flight[]): [string, Flight[]][] {
-  const map = new Map<string, Flight[]>()
-  for (const f of flights) {
-    const existing = map.get(f.flight_date) ?? []
-    existing.push(f)
-    map.set(f.flight_date, existing)
-  }
-  return [...map.entries()]
-}
+import { useUrlState } from '@/lib/navigation'
 
 type Filter = 'all' | string
 type SortBy = 'date' | 'pilot' | 'route' | 'notes'
+const SORT_BY_VALUES: readonly SortBy[] = ['date', 'pilot', 'route', 'notes']
 
 export function Flights() {
   const navigate = useNavigate()
   const [flights, setFlights] = useState<Flight[]>([])
-  const [filter, setFilter] = useState<Filter>('all')
-  const [sortBy, setSortBy] = useState<SortBy>('date')
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
-  const [searchText, setSearchText] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // Kept in the URL so coming back from a flight returns to the same filtered list.
+  const [filter, setFilter] = useUrlState<Filter>('pilot', 'all')
+  const [sortBy, setSortBy] = useUrlState<SortBy>('sort', 'date', SORT_BY_VALUES)
+  const [sortOrder, setSortOrder] = useUrlState<'desc' | 'asc'>('order', 'desc', ['desc', 'asc'])
+  const [searchText, setSearchText] = useUrlState<string>('q', '')
+  const [dateFrom, setDateFrom] = useUrlState<string>('from', '')
+  const [dateTo, setDateTo] = useUrlState<string>('to', '')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
@@ -74,8 +62,6 @@ export function Flights() {
     setDateFrom('')
     setDateTo('')
   }
-
-  const groups = groupByDate(filteredFlights)
 
   const totalHobbs = filteredFlights.reduce((s, f) => s + parseFloat(f.tach_time), 0)
   // A blank field means nothing was added, so averages are per Flight hour across all listed flights.
@@ -226,26 +212,11 @@ export function Flights() {
           </div>
         )}
 
-        {sortBy === 'date' ? (
-          groups.map(([date, dayFlights]) => (
-            <div key={date} className="mb-4">
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                {formatDate(date)}
-              </p>
-              <div className="space-y-2">
-                {dayFlights.map(f => (
-                  <FlightCard key={f.id} flight={f} onChange={() => setReloadKey(k => k + 1)} />
-                ))}
-              </div>
-            </div>
-          ))
-        ) : (
-          <div className="space-y-2">
-            {filteredFlights.map(f => (
-              <FlightCard key={f.id} flight={f} showDate onChange={() => setReloadKey(k => k + 1)} />
-            ))}
-          </div>
-        )}
+        <div className="space-y-2">
+          {filteredFlights.map(f => (
+            <FlightCard key={f.id} flight={f} onChange={() => setReloadKey(k => k + 1)} />
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -265,7 +236,7 @@ function FilterTab({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-function FlightCard({ flight: f, showDate, onChange }: { flight: Flight; showDate?: boolean; onChange: () => void }) {
+function FlightCard({ flight: f, onChange }: { flight: Flight; onChange: () => void }) {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const colorOf = useMemberColors()
@@ -285,11 +256,9 @@ function FlightCard({ flight: f, showDate, onChange }: { flight: Flight; showDat
         onClick={() => setOpen(o => !o)}
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o) } }}
       >
+        <DateTile date={f.flight_date} />
         <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-4">
           <div className="shrink-0 space-y-0.5">
-            {showDate && (
-              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{formatDate(f.flight_date)}</p>
-            )}
             <p className="tabular-nums text-sm">
               {hobbsTime && (
                 <>

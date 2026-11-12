@@ -47,6 +47,18 @@ function parseCSV(text) {
   return rows;
 }
 
+// ForeFlight exports dates as YYYY-MM-DD, but a file opened and re-saved in Excel comes back as
+// M/D/YYYY (or M/D/YY). Accept those too; anything else isn't a flight row.
+function normalizeDate(v) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/.exec(v);
+  if (!m) return null;
+  let [, mo, d, y] = m;
+  if (y.length === 2) y = (Number(y) > 50 ? '19' : '20') + y;
+  if (Number(mo) < 1 || Number(mo) > 12 || Number(d) < 1 || Number(d) > 31) return null;
+  return `${y}-${mo.padStart(2, '0')}-${d.padStart(2, '0')}`;
+}
+
 // Sum approach counts from Approach1-Approach6 fields (format: "count;type;runway;airport;notes;suffix")
 function countApproaches(row, colMap) {
   let total = 0;
@@ -108,27 +120,25 @@ async function importForeflightCsv({ userId, partnershipId, text }) {
   const get = (row, col) => (row[colMap[col]] ?? '').trim();
   const getInt = (row, col) => { const v = parseInt(get(row, col), 10); return isNaN(v) ? 0 : v; };
 
-  // Delete all existing foreflight imports for this user before re-inserting
-  await pool.query(
-    `DELETE FROM currency_events WHERE user_id = $1 AND source = 'foreflight_import'`,
-    [userId]
-  );
-
-  let imported = 0;
+  const events = [];
   let skipped = 0;
+  let flightRows = 0;
   let lastFlightDate = null;
 
   for (const row of rows.slice(headerRowIdx + 1)) {
-    const dateVal = get(row, 'Date');
-    if (!dateVal || !/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) { skipped++; continue; }
+    const dateVal = normalizeDate(get(row, 'Date'));
+    if (!dateVal) { skipped++; continue; }
+    flightRows++;
     if (!lastFlightDate || dateVal > lastFlightDate) lastFlightDate = dateVal;
 
     // Use the FullStop-specific totals rather than "Landing Full-Stop Day/Night" — some
     // ForeFlight export variants (e.g. simpler logbook configs) omit those two columns
     // entirely, which silently zeroed every landing (day AND night) for those users.
     // DayLandingsFullStop / NightLandingsFullStop are present in every export we've seen.
-    const landingsDay   = getInt(row, 'DayLandingsFullStop');
+    // Night currency needs full-stop landings, but day currency counts touch-and-goes too, so
+    // day landings are every landing that isn't a night full stop (AllLandings, when exported).
     const landingsNight = getInt(row, 'NightLandingsFullStop');
+    const landingsDay   = Math.max(getInt(row, 'DayLandingsFullStop'), getInt(row, 'AllLandings') - landingsNight);
     const holds         = getInt(row, 'Holds');
     const approaches    = countApproaches(row, colMap);
     const isBfr         = !!get(row, 'Flight Review (FAA)');
@@ -157,29 +167,46 @@ async function importForeflightCsv({ userId, partnershipId, text }) {
     else if (effectiveNightLandings > 0) eventType = 'night_landing';
     else                             eventType = 'day_landing';
 
-    await pool.query(`
-      INSERT INTO currency_events
-        (user_id, partnership_id, event_date, event_type,
-         landings_day, landings_night, approaches, holds_accomplished,
-         source, aircraft_type, aircraft_class)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'foreflight_import', $9, $10)
-    `, [userId, partnershipId, dateVal, eventType,
-        effectiveDayLandings, effectiveNightLandings, approaches, holds > 0, aircraftType, aircraftClass]);
-
-    imported++;
+    events.push([userId, partnershipId, dateVal, eventType,
+      effectiveDayLandings, effectiveNightLandings, approaches, holds > 0, aircraftType, aircraftClass]);
   }
 
-  // Manual entries bridge the gap between monthly exports; once ForeFlight's log covers their
-  // dates they'd be counted twice, so drop them.
+  // A file with no recognizable flight rows (unexpected date format, wrong export) must not
+  // wipe out the member's existing currency history.
+  if (!flightRows) {
+    throw Object.assign(new Error('No flights with a recognizable date were found in the Flights Table'), { status: 400 });
+  }
+
+  // Replace this user's previous import in one transaction, so a failure leaves the old data.
   let manualCleared = 0;
-  if (lastFlightDate) {
-    const { rowCount } = await pool.query(
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(`DELETE FROM currency_events WHERE user_id = $1 AND source = 'foreflight_import'`, [userId]);
+    for (const ev of events) {
+      await client.query(`
+        INSERT INTO currency_events
+          (user_id, partnership_id, event_date, event_type,
+           landings_day, landings_night, approaches, holds_accomplished,
+           source, aircraft_type, aircraft_class)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'foreflight_import', $9, $10)
+      `, ev);
+    }
+    // Manual entries bridge the gap between monthly exports; once ForeFlight's log covers their
+    // dates they'd be counted twice, so drop them.
+    const { rowCount } = await client.query(
       `DELETE FROM currency_events WHERE user_id = $1 AND source = 'manual' AND event_date <= $2`,
       [userId, lastFlightDate]);
     manualCleared = rowCount;
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
   }
 
-  return { imported, skipped, lastFlightDate, manualCleared };
+  return { imported: events.length, skipped, lastFlightDate, manualCleared };
 }
 
 // Import a ForeFlight CSV for a member and keep the bookkeeping the upload route has always done:

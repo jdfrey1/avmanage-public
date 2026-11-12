@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { PilotPicker } from '@/components/PilotPicker'
-import { useNavigate } from 'react-router-dom'
-import { ChevronLeft, Camera, Upload } from 'lucide-react'
+import { useGoBack } from '@/lib/navigation'
+import { ChevronLeft, Camera, Upload, Plus } from 'lucide-react'
 import { api, type GarminLog, type Flight, type Squawk, type CurrencyStatus, type TachOcrResult, type PartnershipMember, type Partnership } from '@/lib/api'
 import { takePendingPhoto } from '@/lib/pendingPhoto'
 import { useAuth } from '@/context/AuthContext'
@@ -21,7 +21,7 @@ function today() {
 }
 
 export function LogFlight() {
-  const navigate = useNavigate()
+  const goBack = useGoBack('/flights')
   const { user } = useAuth()
 
   const [flightDate, setFlightDate] = useState(today())
@@ -66,6 +66,19 @@ export function LogFlight() {
   const { upload: uploadGarmin, busy: garminBusy } = useGarminUpload()
   const [garminLogs, setGarminLogs] = useState<GarminLog[]>([])
   const [garminMsg, setGarminMsg] = useState('')
+  // Logs already in the app (emailed from Garmin Pilot or uploaded earlier) not yet on a flight.
+  const [unattached, setUnattached] = useState<GarminLog[]>([])
+  // The route last filled in from Garmin logs, so it can follow the selection without
+  // overwriting a route typed by hand.
+  const autoRoute = useRef('')
+
+  useEffect(() => { api.get<GarminLog[]>('/garmin/unmatched').then(setUnattached).catch(() => {}) }, [])
+
+  function selectGarmin(next: GarminLog[]) {
+    const sorted = [...next].sort((a, b) => a.started_at.localeCompare(b.started_at))
+    setGarminLogs(sorted)
+    applyGarmin(sorted)
+  }
 
   async function handleGarminSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? [])
@@ -77,8 +90,8 @@ export function LogFlight() {
       const logs = results.filter(r => r.log && (r.status === 'unmatched' || r.status === 'duplicate')).map(r => r.log!)
       const { errors } = describeResults(results)
       const taken = results.filter(r => r.status === 'duplicate' && r.log?.flight_id).length
-      setGarminLogs(prev => [...prev, ...logs.filter(l => !l.flight_id && !prev.some(p => p.id === l.id))]
-        .sort((a, b) => a.started_at.localeCompare(b.started_at)))
+      const fresh = logs.filter(l => !l.flight_id && !garminLogs.some(p => p.id === l.id))
+      if (fresh.length) selectGarmin([...garminLogs, ...fresh])
       setGarminMsg([...errors, taken ? `${taken} file${taken > 1 ? 's are' : ' is'} already attached to another flight` : ''].filter(Boolean).join(' · '))
     } catch (err) {
       setGarminMsg(err instanceof Error ? err.message : 'Upload failed')
@@ -86,19 +99,32 @@ export function LogFlight() {
   }
 
   // Engine run time → Hobbs, airborne time → Flight timer; also date and route when blank.
-  function applyGarmin() {
-    if (!garminLogs.length) return
-    const engine = garminLogs.reduce((s, l) => s + (l.engine_hrs ?? 0), 0)
-    const air = garminLogs.reduce((s, l) => s + (l.air_hrs ?? 0), 0)
-    if (tachStart) setTachEnd((parseFloat(tachStart) + engine).toFixed(1))
-    if (hobbsStart) setHobbsEnd((parseFloat(hobbsStart) + air).toFixed(1))
-    const first = garminLogs[0]
+  // Runs whenever the selected logs change.
+  function applyGarmin(logs: GarminLog[]) {
+    const routeIsAuto = !route.trim() || route === autoRoute.current
+    if (!logs.length) {
+      if (routeIsAuto) { setRoute(''); autoRoute.current = '' }
+      return
+    }
+    const engine = logs.reduce((s, l) => s + (l.engine_hrs ?? 0), 0)
+    const air = logs.reduce((s, l) => s + (l.air_hrs ?? 0), 0)
+    // Meter time is rounded up to the next tenth (0.72 hr → 0.8), as the meters are logged.
+    const upTenth = (h: number) => Math.ceil(Math.round(h * 1000) / 100) / 10
+    if (tachStart) setTachEnd((parseFloat(tachStart) + upTenth(engine)).toFixed(1))
+    if (hobbsStart) setHobbsEnd((parseFloat(hobbsStart) + upTenth(air)).toFixed(1))
+    const first = logs[0]
     setFlightDate(new Date(first.engine_on_at ?? first.started_at).toLocaleDateString('en-CA'))
-    if (!route.trim()) {
-      const stops = [first.origin, ...garminLogs.map(l => l.destination)].filter(Boolean) as string[]
-      setRoute(stops.filter((a, i) => i === 0 || a !== stops[i - 1]).join('-'))
+    if (routeIsAuto) {
+      const stops = [first.origin, ...logs.map(l => l.destination)].filter(Boolean) as string[]
+      const r = stops.filter((a, i) => i === 0 || a !== stops[i - 1]).join('-')
+      setRoute(r)
+      autoRoute.current = r
     }
   }
+
+  const garminWhen = (l: GarminLog) =>
+    new Date(l.engine_on_at ?? l.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+  const available = unattached.filter(u => !garminLogs.some(l => l.id === u.id))
 
   useEffect(() => {
     api.get<Flight[]>('/flights?limit=1').then(async ([last]) => {
@@ -213,7 +239,7 @@ export function LogFlight() {
           tach_at_report: parseFloat(tachEnd),
         })
       }
-      navigate('/flights')
+      goBack()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save flight')
     } finally {
@@ -226,7 +252,7 @@ export function LogFlight() {
       {/* Header */}
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
         <button
-          onClick={() => navigate('/flights')}
+          onClick={() => goBack()}
           className="rounded-md p-1 text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-5 w-5" />
@@ -298,22 +324,49 @@ export function LogFlight() {
             <input ref={garminInputRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={handleGarminSelect} />
           </div>
           {garminLogs.length === 0 ? (
-            <p className="mt-1 text-xs text-muted-foreground">“Original CSV” from flyGarmin, one per engine start. Fills in times and attaches the engine data to this flight.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Pick the logs for this flight below, or upload “Original CSV” files (one per engine start). Fills in the date, route and times and attaches the engine data to this flight.</p>
           ) : (
             <div className="mt-2 space-y-2">
               <p className="text-xs">{garminLogs.length} log{garminLogs.length > 1 ? 's' : ''}: {garminSummary(garminLogs)}</p>
               <ul className="space-y-0.5 text-xs text-muted-foreground">
                 {garminLogs.map(l => (
                   <li key={l.id} className="flex items-center gap-2 tabular-nums">
-                    <span>{l.origin ?? '?'} → {l.destination ?? '?'} · {new Date(l.engine_on_at ?? l.started_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} · {l.engine_hrs?.toFixed(1)} engine / {l.air_hrs?.toFixed(1)} air</span>
-                    <button type="button" onClick={() => setGarminLogs(g => g.filter(x => x.id !== l.id))} className="ml-auto hover:text-destructive">Remove</button>
+                    <span>{l.origin ?? '?'} → {l.destination ?? '?'} · {garminWhen(l)} · {l.engine_hrs?.toFixed(1)} engine / {l.air_hrs?.toFixed(1)} air</span>
+                    <button type="button" onClick={() => selectGarmin(garminLogs.filter(x => x.id !== l.id))} className="ml-auto hover:text-destructive">Remove</button>
                   </li>
                 ))}
               </ul>
-              <Button type="button" size="sm" variant="outline" onClick={applyGarmin}>
-                Fill in date, route &amp; end times
-              </Button>
-              <p className="text-[11px] text-muted-foreground">Hobbs end = start + engine time, Flight end = start + airborne time. Check against the meters.</p>
+              <p className="text-[11px] text-muted-foreground">Filled in: date, route, Hobbs end = start + engine time, Flight end = start + airborne time, each rounded up to the next tenth. Check against the meters.</p>
+            </div>
+          )}
+          {available.length > 0 && (
+            <div className="mt-3 border-t pt-2">
+              <p className="text-xs font-medium text-muted-foreground">Not yet on a flight</p>
+              <ul className="mt-1 space-y-1 text-xs">
+                {available.map(l => (
+                  <li key={l.id} className="flex items-center gap-2 tabular-nums">
+                    <span className="min-w-0">
+                      {l.origin ?? '?'} → {l.destination ?? '?'} · {garminWhen(l)}
+                      <span className="text-muted-foreground"> · {l.engine_hrs?.toFixed(1)} engine / {l.air_hrs?.toFixed(1)} air</span>
+                    </span>
+                    <button type="button" onClick={() => selectGarmin([...garminLogs, l])}
+                      className="ml-auto flex shrink-0 items-center gap-0.5 rounded-full border px-2 py-0.5 text-primary hover:bg-primary/10">
+                      <Plus className="h-3 w-3" /> Add
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {available.length > 1 && garminLogs.length === 0 && (
+                <button type="button" className="mt-1.5 text-xs text-primary hover:underline"
+                  onClick={() => {
+                    // All logs from the newest log's local date (one flight with several legs).
+                    const day = (l: GarminLog) => new Date(l.engine_on_at ?? l.started_at).toLocaleDateString('en-CA')
+                    const d = day(available[0])
+                    selectGarmin(available.filter(l => day(l) === d))
+                  }}>
+                  Add all from {new Date(available[0].engine_on_at ?? available[0].started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </button>
+              )}
             </div>
           )}
           {garminMsg && <p className="mt-1 text-xs text-destructive">{garminMsg}</p>}

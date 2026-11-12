@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft } from 'lucide-react'
 import { api, uploadInvoice, type LedgerEntry, type RecurringCharge, type PartnershipMember } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
@@ -75,6 +76,7 @@ export function NewLedgerEntry() {
     : null
 
   const ledgerUrl = selectedLesseeIds[0] ? `/ledger?lessee_id=${selectedLesseeIds[0]}` : '/ledger'
+  const goBack = useGoBack(ledgerUrl)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -116,7 +118,7 @@ export function NewLedgerEntry() {
         try {
           const inv = await uploadInvoice(invoiceFile, ids)
           // Not a recognised work order: take them to fill in the vendor / number / date.
-          navigate(inv.parsed ? ledgerUrl : `/invoices/${inv.id}`)
+          inv.parsed ? goBack() : navigate(`/invoices/${inv.id}`)
           return
         } catch (err: any) {
           setError(`Entry saved, but the invoice upload failed: ${err instanceof Error ? err.message : 'error'}`)
@@ -124,7 +126,7 @@ export function NewLedgerEntry() {
           return
         }
       }
-      navigate(ledgerUrl)
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -136,7 +138,7 @@ export function NewLedgerEntry() {
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
         <button
-          onClick={() => navigate(ledgerUrl)}
+          onClick={() => goBack()}
           className="rounded-md p-1 text-muted-foreground hover:text-foreground"
         >
           <ChevronLeft className="h-5 w-5" />

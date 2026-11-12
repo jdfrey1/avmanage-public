@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useUrlState } from '@/lib/navigation'
 import { ChevronLeft, ChevronRight, Plus, CalendarDays, Link, Download, ExternalLink } from 'lucide-react'
 import { api, type ScheduleBlock, type PartnershipMember } from '@/lib/api'
+import { DateTile } from '@/components/DateTile'
 import { AircraftStatusBanner, pastInsurance, useAircraftStatus } from '@/components/AircraftStatusBanner'
 import { Badge } from '@/components/ui/badge'
 import { useMemberColors, DOWNTIME_DOT } from '@/lib/memberColors'
@@ -31,9 +33,9 @@ function displayName(b: ScheduleBlock, members: PartnershipMember[]): string {
 function formatTimeRange(start: string, end: string) {
   const fmt = (iso: string) =>
     new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  const startDate = new Date(start)
-  const label = startDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-  return `${label} · ${fmt(start)} – ${fmt(end)}`
+  // The date tile shows the start day; name the end day only when the block runs past it.
+  const day = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return day(start) === day(end) ? `${fmt(start)} – ${fmt(end)}` : `${fmt(start)} – ${day(end)}, ${fmt(end)}`
 }
 
 // "3 flights logged · Alex 2, Sam 1" for a reservation; null when not applicable.
@@ -66,8 +68,13 @@ export function Schedule() {
   const navigate = useNavigate()
 
   const now = new Date()
-  const [year, setYear]   = useState(now.getFullYear())
-  const [month, setMonth] = useState(now.getMonth())
+  // The month shown is kept in the URL (?month=YYYY-MM) so Back from a reservation returns to it.
+  const thisMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+  const [monthParam, setMonthParam] = useUrlState<string>('month', thisMonth)
+  const [y0, m0] = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam.split('-').map(Number) : [now.getFullYear(), now.getMonth() + 1]
+  const year = y0
+  const month = m0 - 1
+  const setYearMonth = (y: number, m: number) => setMonthParam(`${y}-${String(m + 1).padStart(2, '0')}`)
   const aircraftStatus = useAircraftStatus()
   const notInsured = (b: ScheduleBlock) =>
     b.block_type === 'reservation' && pastInsurance(aircraftStatus, new Date(b.end_dt).toLocaleDateString('en-CA'))
@@ -121,15 +128,22 @@ export function Schedule() {
       .finally(() => setLoading(false))
   }, [year, month])
 
+  // Upcoming (not yet ended) soonest first; past most recent first.
+  const nowMs = Date.now()
+  const upcomingBlocks = blocks.filter(b => new Date(b.end_dt).getTime() > nowMs)
+    .sort((a, b) => new Date(a.start_dt).getTime() - new Date(b.start_dt).getTime())
+  const pastBlocks = blocks.filter(b => new Date(b.end_dt).getTime() <= nowMs)
+    .sort((a, b) => new Date(b.start_dt).getTime() - new Date(a.start_dt).getTime())
+
   function prevMonth() {
     setDayPicker(null)
-    if (month === 0) { setYear(y => y - 1); setMonth(11) }
-    else setMonth(m => m - 1)
+    if (month === 0) setYearMonth(year - 1, 11)
+    else setYearMonth(year, month - 1)
   }
   function nextMonth() {
     setDayPicker(null)
-    if (month === 11) { setYear(y => y + 1); setMonth(0) }
-    else setMonth(m => m + 1)
+    if (month === 11) setYearMonth(year + 1, 0)
+    else setYearMonth(year, month + 1)
   }
 
   const firstDow   = new Date(year, month, 1).getDay()
@@ -293,15 +307,15 @@ export function Schedule() {
                   className={cn('flex cursor-pointer items-start gap-3 rounded-md border bg-background p-2.5 transition-colors hover:bg-accent/40', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
                   onClick={() => navigate(`/schedule/${b.id}/edit`)}
                 >
-                  <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
-                    {displayName(b, members).split(' ')[0]}
-                  </Badge>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium">{b.title}</p>
                     <p className="text-xs text-muted-foreground">{formatTimeRange(b.start_dt, b.end_dt)}</p>
                     <FlightsLogged b={b} />
                     {notInsured(b) && <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Not covered by insurance on record</p>}
                   </div>
+                  <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
+                    {displayName(b, members).split(' ')[0]}
+                  </Badge>
                 </div>
               ))}
             </div>
@@ -319,33 +333,42 @@ export function Schedule() {
           </div>
         )}
 
-        <div className="space-y-2">
-          {blocks.map(b => (
-            <div
-              key={b.id}
-              className={cn('flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 hover:bg-accent/40 active:bg-accent/60 transition-colors', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
-              onClick={() => navigate(`/schedule/${b.id}/edit`)}
-            >
-              <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
-                {displayName(b, members).split(' ')[0]}
-              </Badge>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="truncate text-sm font-medium">{b.title}</p>
-                  {b.block_type !== 'reservation' && (
-                    <Badge variant="outline" className="shrink-0 capitalize text-xs">
-                      {b.block_type}
-                    </Badge>
-                  )}
+        {[
+          { label: 'Upcoming', items: upcomingBlocks },
+          { label: 'Past', items: pastBlocks },
+        ].filter(g => g.items.length > 0).map(g => (
+          <div key={g.label} className="mb-4">
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{g.label}</h2>
+            <div className="space-y-2">
+              {g.items.map(b => (
+                <div
+                  key={b.id}
+                  className={cn('flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 hover:bg-accent/40 active:bg-accent/60 transition-colors', unflown(b) && 'border-amber-400 bg-amber-50/60 dark:border-amber-600 dark:bg-amber-950/20')}
+                  onClick={() => navigate(`/schedule/${b.id}/edit`)}
+                >
+                  <DateTile date={b.start_dt} />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="truncate text-sm font-medium">{b.title}</p>
+                      {b.block_type !== 'reservation' && (
+                        <Badge variant="outline" className="shrink-0 capitalize text-xs">
+                          {b.block_type}
+                        </Badge>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{formatTimeRange(b.start_dt, b.end_dt)}</p>
+                    <FlightsLogged b={b} />
+                    {notInsured(b) && <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Not covered by insurance on record</p>}
+                    {b.notes && <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{b.notes}</p>}
+                  </div>
+                  <Badge className={cn('mt-0.5 shrink-0', colorOf(effectivePilotId(b)).pill)}>
+                    {displayName(b, members).split(' ')[0]}
+                  </Badge>
                 </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">{formatTimeRange(b.start_dt, b.end_dt)}</p>
-                <FlightsLogged b={b} />
-                {notInsured(b) && <p className="text-[11px] font-medium text-amber-600 dark:text-amber-400">Not covered by insurance on record</p>}
-                {b.notes && <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{b.notes}</p>}
-              </div>
+              ))}
             </div>
-          ))}
-        </div>
+          </div>
+        ))}
       </div>
     </div>
   )

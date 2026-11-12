@@ -124,4 +124,4 @@ function initCron() {
   cron.schedule('20 * * * *', run); // hourly
 }
 
-module.exports = { initCron, pollEmails };
+module.exports = { initCron, pollEmails, findMember, walk };

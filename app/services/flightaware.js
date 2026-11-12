@@ -244,7 +244,12 @@ async function sync(days = 3) {
 }
 
 function initCron() {
-  const run = () => sync().catch(err => console.error('[flightaware] sync failed:', err.message));
+  // Garmin Pilot data logs emailed to the same inbox are picked up on the same schedule.
+  const garminEmail = require('./garminEmail');
+  const run = async () => {
+    await sync().catch(err => console.error('[flightaware] sync failed:', err.message));
+    await garminEmail.pollEmails().catch(err => console.error('[garmin-email] poll failed:', err.message));
+  };
   setTimeout(run, 30000);
   cron.schedule('*/15 * * * *', run);
 }

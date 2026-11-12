@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { InsuranceWarning, useAircraftStatus } from '@/components/AircraftStatusBanner'
 import { api, type ScheduleBlock, type PartnershipMember } from '@/lib/api'
@@ -31,7 +32,7 @@ function fmt(iso: string) {
 
 export function EditReservation() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  const goBack = useGoBack('/schedule')
 
   const [loading, setLoading]           = useState(true)
   const [notFound, setNotFound]         = useState(false)
@@ -136,7 +137,7 @@ export function EditReservation() {
     setSubmitting(true)
     try {
       await api.patch<ScheduleBlock>(`/schedule/${id}`, payload)
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       if (err.status === 409 && err.conflict) {
         setConflictBlock(err.conflict)
@@ -154,7 +155,7 @@ export function EditReservation() {
     setSubmitting(true)
     try {
       await api.patch<ScheduleBlock>(`/schedule/${id}`, { ...payload, force: true })
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
       setConflictBlock(null)
@@ -170,7 +171,7 @@ export function EditReservation() {
     try {
       await api.delete(`/schedule/${conflictBlock!.id}`)
       await api.patch<ScheduleBlock>(`/schedule/${id}`, payload)
-      navigate('/schedule')
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -183,7 +184,7 @@ export function EditReservation() {
     setDeleting(true)
     try {
       await api.delete(`/schedule/${id}`)
-      navigate('/schedule')
+      goBack()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete')
       setDeleting(false)
@@ -201,7 +202,7 @@ export function EditReservation() {
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-3">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate('/schedule')}
+            onClick={() => goBack()}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
           >
             <ChevronLeft className="h-5 w-5" />

@@ -265,6 +265,7 @@ export interface MaintenanceInterval {
   next_due_hours: number
   hours_remaining: number | null
   status: 'ok' | 'due_soon' | 'overdue' | 'unknown'
+  logbook_entries: TrackerLogbookEntry[]
 }
 
 export interface MaintenanceRecurring {
@@ -292,13 +293,13 @@ export interface MaintenanceAttachment {
 export interface CostAnalysis {
   start_date: string
   end_date: string
+  first_flight_date: string | null
   total_hours: number
-  pilots: { pilot_id: string; pilot_name: string; hours: number; pct: number }[]
   total_cost: number
   fixed_cost: number
   variable_cost: number
   cost_per_hour: number
-  by_category: { category: string; total: number }[]
+  by_category: { category: string; total: number; variable: boolean }[]
 }
 
 export interface AnnualHoursSummary {
@@ -316,9 +317,9 @@ export interface AnnualHoursSummary {
 }
 
 export interface CurrencyStatus {
-  ifr:          { current: boolean; expiresInDays: number; approachesInWindow: number }
-  dayLanding:   { current: boolean; expiresInDays: number }
-  nightLanding: { current: boolean; expiresInDays: number }
+  ifr:          { current: boolean; expiresDate: string | null; expiresInDays: number; approachesInWindow: number; holdInWindow: boolean; lastHoldDate: string | null; ipcDate: string | null }
+  dayLanding:   { current: boolean; expiresDate: string | null; expiresInDays: number }
+  nightLanding: { current: boolean; expiresDate: string | null; expiresInDays: number }
   medical:      { current: boolean; expiresDate: string | null; daysUntilExpiry: number | null }
   bfr:          { current: boolean; accomplishedDate: string | null; expiresDate: string | null; daysUntilExpiry: number | null }
   lastImportAt:   string | null
@@ -429,18 +430,89 @@ export interface LogbookEntry {
   reviewed_at: string | null
   created_at: string
   source_filename: string
-  invoice_id?: string | null
-  invoice_number?: string | null
+  invoices?: LogbookInvoiceLink[]
+  oil_sample?: LogbookOilSample | null
+}
+
+// An invoice that bills the work this entry records (an entry can span several invoices).
+export interface LogbookInvoiceLink {
+  id: string
+  invoice_number: string
+  vendor: string | null
+  invoice_date: string | null
+}
+
+// The oil analysis sample drawn at the oil change this entry records.
+export interface LogbookOilSample {
+  id: string
+  sample_date: string
+  unit_hours: number
+  lab_number: string | null
+  flagged: boolean
+  url: string | null
 }
 
 export interface LogbookCitation {
   id: string
   document_id: string
-  category: LogbookCategory
+  category: LogbookCategory | 'oil_analysis'
   source_filename: string
   page_number: number | null
   entry_date: string | null
   summary: string
+  url?: string | null   // set for oil analysis citations (the lab report PDF)
+}
+
+export interface OilSample {
+  id: string
+  file_id: string | null
+  page_number: number | null
+  source: 'report' | 'history'
+  lab: string | null
+  lab_number: string | null
+  report_date: string | null
+  sample_date: string
+  oil_hours: number | null
+  unit_hours: number | null
+  makeup_oil: string | null
+  oil_type: string | null
+  engine: string | null
+  submitted_by: string | null
+  elements: Record<string, number>
+  properties: Record<string, string>
+  flags: string[]
+  comments: string | null
+  notes: string | null
+  filename: string | null
+}
+
+export interface OilFile {
+  id: string
+  filename: string
+  page_count: number | null
+  status: 'pending' | 'processed' | 'error'
+  error_message: string | null
+  uploaded_at: string
+  sample_count: number
+}
+
+export interface OilAnalysisResponse {
+  samples: OilSample[]
+  files: OilFile[]
+  trends: { level: 'watch' | 'good'; metal?: string; text: string }[]
+  elements: { key: string; symbol: string; source: string }[]
+}
+
+export const oilApi = {
+  list: () => api.get<OilAnalysisResponse>('/oil-analysis'),
+  upload: (file: File) => {
+    const fd = new FormData()
+    fd.append('file', file)
+    return api.upload<{ file_id: string; reports: number; stored: number }>('/oil-analysis/upload', fd)
+  },
+  reprocess: (fileId: string) => api.post<{ reports: number; stored: number }>(`/oil-analysis/files/${fileId}/process`, {}),
+  remove: (fileId: string) => api.delete(`/oil-analysis/files/${fileId}`),
+  fileUrl: (fileId: string, page?: number | null) => `/api/oil-analysis/files/${fileId}/file${page ? `#page=${page}` : ''}`,
 }
 
 export interface LogbookAskResponse {
@@ -471,6 +543,7 @@ export const logbookApi = {
     return api.upload<{ document_id: string; entries: LogbookEntry[] }>('/logbook/import', fd)
   },
   sourceUrl: (documentId: string) => `/api/logbook/documents/${documentId}/file`,
+  adItems: () => api.get<AdListResponse>('/logbook/ad-items'),
 }
 
 export type AircraftDocType =
@@ -529,6 +602,76 @@ export interface InspectionItem {
   due_date: string | null
   days_until: number | null
   status: 'overdue' | 'due_soon' | 'ok' | 'no_date'
+  logbook_entries: TrackerLogbookEntry[]
+  // 'database' = read-only row mirrored from Maintenance → Databases (the Navigation cycle).
+  source?: 'database'
+}
+// An avionics database loaded in the aircraft: installed cycle and expiration.
+export interface AvionicsDatabase {
+  id: string
+  name: string
+  cycle: string | null
+  expires_date: string | null
+  warn_days: number
+  notes: string | null
+  sort_order: number
+  updated_at: string
+  days_until: number | null
+  status: 'expired' | 'due_soon' | 'ok' | 'no_expiry'
+}
+export interface AvionicsDatabasePhoto {
+  id: string
+  filename: string
+  taken_date: string
+  uploaded_at: string
+}
+export interface AvionicsDatabaseUpdate {
+  id: string
+  database_id: string | null
+  database_name: string
+  previous_cycle: string | null
+  cycle: string | null
+  expires_date: string | null
+  updated_on: string
+  photo_id: string | null
+  recorded_by_name: string | null
+}
+// A logbook entry recording when a tracked item was last done.
+export interface TrackerLogbookEntry {
+  id: string
+  entry_date: string | null
+  category: LogbookCategory
+  page_number: number | null
+  summary: string
+}
+
+// Logbooks → AD/SB Compliance: one AD or SB, as of the latest compliance report.
+export interface AdItemEntry extends TrackerLogbookEntry {
+  role: 'report' | 'log'
+}
+export interface AdItem {
+  id: string
+  kind: 'ad' | 'sb'
+  applies_to: 'airframe' | 'engine' | 'propeller' | 'service_bulletin'
+  number: string
+  effective_date: string | null
+  subject: string | null
+  status: 'complied' | 'not_applicable' | 'superseded'
+  method_of_compliance: string | null
+  recurring: boolean
+  recurring_note: string | null
+  complied_date: string | null
+  complied_hours: number | null
+  next_due_hours: number | null
+  next_due_date: string | null
+  hours_remaining: number | null
+  notes: string | null
+  entries: AdItemEntry[]
+}
+export interface AdListResponse {
+  current_hours: number | null
+  report: { id: string; source_filename: string; page_count: number | null; report_date: string | null; report_hours: string | null } | null
+  items: AdItem[]
 }
 
 export interface AircraftStatus {

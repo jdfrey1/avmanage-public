@@ -7,95 +7,89 @@ const pool = require('../db');
 // implementation instead of drifting. Each function takes explicit ids, not req.session/
 // req.query, so it can run outside a request (from a cron job).
 
+// Currency dates are calendar dates in the app's time zone (the server runs in UTC, which made
+// "today" tomorrow every evening). Days left are counted the way ForeFlight does: the expiration
+// day itself counts, so landings yesterday with a 90-day limit show 90 days left. Once lapsed, the
+// value is negative: -N means it expired N days ago.
+const CURRENCY_TZ = process.env.APP_TIMEZONE || 'America/New_York';
+const localToday = () => new Date().toLocaleDateString('en-CA', { timeZone: CURRENCY_TZ });
+const dayNum = (ymd) => { const [y, m, d] = ymd.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000; };
+const ymdOf = (n) => new Date(n * 86400000).toISOString().slice(0, 10);
+const addDays = (ymd, n) => ymdOf(dayNum(ymd) + n);
+// Last day of the Nth calendar month after the month of `ymd`.
+const endOfMonthAfter = (ymd, months) => { const [y, m] = ymd.split('-').map(Number); return ymdOf(Date.UTC(y, m - 1 + months + 1, 0) / 86400000); };
+const daysLeft = (expiry, today) => { const d = dayNum(expiry) - dayNum(today); return d >= 0 ? d + 1 : d; };
+
 async function getCurrencyStatus(userId) {
-  const { rows: approachRows } = await pool.query(`
-    SELECT event_date::text, SUM(approaches)::int AS approach_count
+  const today = localToday();
+
+  // IFR (14 CFR 61.57(c)): within the 6 calendar months preceding the month of the flight,
+  // 6 instrument approaches AND holding procedures. The window runs from the 1st of the month six
+  // months back, and each requirement lapses at the end of the 6th month after the flight that
+  // satisfied it; IFR currency ends when the first of the two lapses. An IPC (61.57(d)) also
+  // makes the pilot current through the end of the 6th month after it.
+  const { rows: ifrRows } = await pool.query(`
+    SELECT event_date::text,
+           SUM(approaches)::int AS approach_count,
+           BOOL_OR(holds_accomplished) AS hold,
+           BOOL_OR(event_type = 'ipc') AS ipc
     FROM currency_events
     WHERE user_id = $1
       AND source IN ('foreflight_import', 'manual', 'auto_flight')
-      AND approaches > 0
-      AND event_date >= CURRENT_DATE - INTERVAL '6 months'
+      AND (approaches > 0 OR holds_accomplished OR event_type = 'ipc')
+      AND event_date >= date_trunc('month', $2::date) - INTERVAL '6 months'
     GROUP BY event_date
     ORDER BY event_date DESC
-  `, [userId]);
+  `, [userId, today]);
 
-  const totalApproaches = approachRows.reduce((s, r) => s + r.approach_count, 0);
-  const ifrCurrent = totalApproaches >= 6;
-
-  let ifrExpiresInDays = -1;
-  if (ifrCurrent) {
-    let accum = 0;
-    for (const r of approachRows) {
-      accum += r.approach_count;
-      if (accum >= 6) {
-        const qualifying = new Date(r.event_date + 'T12:00:00');
-        const expiry = new Date(qualifying.getFullYear(), qualifying.getMonth() + 7, 0, 12, 0, 0);
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        ifrExpiresInDays = Math.floor((expiry - today) / 86400000);
-        break;
-      }
-    }
+  const totalApproaches = ifrRows.reduce((s, r) => s + r.approach_count, 0);
+  const lastHold = ifrRows.find(r => r.hold)?.event_date ?? null;
+  const lastIpc = ifrRows.find(r => r.ipc)?.event_date ?? null;
+  let sixthApproach = null;
+  for (let accum = 0, i = 0; i < ifrRows.length; i++) {
+    accum += ifrRows[i].approach_count;
+    if (accum >= 6) { sixthApproach = ifrRows[i].event_date; break; }
   }
 
-  const { rows: dayRows } = await pool.query(`
-    SELECT event_date::text, SUM(landings_day)::int AS count
-    FROM currency_events
-    WHERE user_id = $1
-      AND source IN ('foreflight_import', 'manual', 'auto_flight')
-      AND landings_day > 0
-      AND event_date >= CURRENT_DATE - 90
-      AND (aircraft_class = 'airplane_single_engine_land' OR aircraft_class IS NULL)
-    GROUP BY event_date
-    ORDER BY event_date DESC
-  `, [userId]);
+  let ifrExpiry = null;
+  if (sixthApproach && lastHold) {
+    const ea = endOfMonthAfter(sixthApproach, 6), eh = endOfMonthAfter(lastHold, 6);
+    ifrExpiry = ea < eh ? ea : eh;
+  }
+  if (lastIpc) {
+    const ei = endOfMonthAfter(lastIpc, 6);
+    if (!ifrExpiry || ei > ifrExpiry) ifrExpiry = ei;
+  }
+  const ifrCurrent = !!ifrExpiry && ifrExpiry >= today;
+  const ifrExpiresInDays = ifrExpiry ? daysLeft(ifrExpiry, today) : -1;
 
-  const totalDayLandings = dayRows.reduce((s, r) => s + r.count, 0);
-  const dayLandingCurrent = totalDayLandings >= 3;
-
-  let dayExpiresInDays = -1;
-  if (dayLandingCurrent) {
+  // 61.57(a)/(b): 3 takeoffs and landings in the preceding 90 days. Any landing counts toward
+  // day currency, including night landings; night currency needs night full-stop landings.
+  // Currency runs through the 90th day after the date of the third-most-recent landing.
+  const landingCurrency = async (expr) => {
+    const { rows } = await pool.query(`
+      SELECT event_date::text, SUM(${expr})::int AS count
+      FROM currency_events
+      WHERE user_id = $1
+        AND source IN ('foreflight_import', 'manual', 'auto_flight')
+        AND ${expr} > 0
+        AND event_date >= $2::date - 90
+        AND (aircraft_class = 'airplane_single_engine_land' OR aircraft_class IS NULL)
+      GROUP BY event_date
+      ORDER BY event_date DESC
+    `, [userId, today]);
     let accum = 0;
-    for (const r of dayRows) {
+    for (const r of rows) {
       accum += r.count;
       if (accum >= 3) {
-        const expiry = new Date(r.event_date + 'T12:00:00');
-        expiry.setDate(expiry.getDate() + 90);
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        dayExpiresInDays = Math.floor((expiry - today) / 86400000);
-        break;
+        const expiresDate = addDays(r.event_date, 90);
+        return { current: true, expiresDate, expiresInDays: daysLeft(expiresDate, today) };
       }
     }
-  }
-
-  const { rows: nightRows } = await pool.query(`
-    SELECT event_date::text, SUM(landings_night)::int AS count
-    FROM currency_events
-    WHERE user_id = $1
-      AND source IN ('foreflight_import', 'manual', 'auto_flight')
-      AND landings_night > 0
-      AND event_date >= CURRENT_DATE - 90
-      AND (aircraft_class = 'airplane_single_engine_land' OR aircraft_class IS NULL)
-    GROUP BY event_date
-    ORDER BY event_date DESC
-  `, [userId]);
-
-  const totalNightLandings = nightRows.reduce((s, r) => s + r.count, 0);
-  const nightLandingCurrent = totalNightLandings >= 3;
-
-  let nightExpiresInDays = -1;
-  if (nightLandingCurrent) {
-    let accum = 0;
-    for (const r of nightRows) {
-      accum += r.count;
-      if (accum >= 3) {
-        const expiry = new Date(r.event_date + 'T12:00:00');
-        expiry.setDate(expiry.getDate() + 90);
-        const today = new Date(); today.setHours(0, 0, 0, 0);
-        nightExpiresInDays = Math.floor((expiry - today) / 86400000);
-        break;
-      }
-    }
-  }
+    return { current: false, expiresDate: null, expiresInDays: -1 };
+  };
+  const dayLanding = await landingCurrency('COALESCE(landings_day, 0) + COALESCE(landings_night, 0)');
+  const nightLanding = await landingCurrency('COALESCE(landings_night, 0)');
 
   const { rows: [u] } = await pool.query(
     `SELECT name, last_foreflight_import_at, last_foreflight_import_file,
@@ -105,32 +99,19 @@ async function getCurrencyStatus(userId) {
   );
 
   const medicalDate = u.medical_expires_date ?? null;
-  let medicalCurrent = false;
-  let medicalDaysUntilExpiry = null;
-  if (medicalDate) {
-    const expiry = new Date(medicalDate + 'T12:00:00');
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    medicalDaysUntilExpiry = Math.floor((expiry - today) / 86400000);
-    medicalCurrent = medicalDaysUntilExpiry >= 0;
-  }
+  const medicalDaysUntilExpiry = medicalDate ? daysLeft(medicalDate, today) : null;
+  const medicalCurrent = !!medicalDate && medicalDate >= today;
 
+  // Flight review (61.56): good through the end of the 24th calendar month after it.
   const bfrDate = u.bfr_date ?? null;
-  let bfrCurrent = false;
-  let bfrExpiresDate = null;
-  let bfrDaysUntilExpiry = null;
-  if (bfrDate) {
-    const accomplished = new Date(bfrDate + 'T12:00:00');
-    const expiry = new Date(accomplished.getFullYear(), accomplished.getMonth() + 25, 0, 12, 0, 0);
-    bfrExpiresDate = `${expiry.getFullYear()}-${String(expiry.getMonth() + 1).padStart(2, '0')}-${String(expiry.getDate()).padStart(2, '0')}`;
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    bfrDaysUntilExpiry = Math.floor((expiry - today) / 86400000);
-    bfrCurrent = bfrDaysUntilExpiry >= 0;
-  }
+  const bfrExpiresDate = bfrDate ? endOfMonthAfter(bfrDate, 24) : null;
+  const bfrDaysUntilExpiry = bfrExpiresDate ? daysLeft(bfrExpiresDate, today) : null;
+  const bfrCurrent = !!bfrExpiresDate && bfrExpiresDate >= today;
 
   return {
-    ifr:          { current: ifrCurrent,          expiresInDays: ifrExpiresInDays,   approachesInWindow: totalApproaches },
-    dayLanding:   { current: dayLandingCurrent,   expiresInDays: dayExpiresInDays },
-    nightLanding: { current: nightLandingCurrent, expiresInDays: nightExpiresInDays },
+    ifr:          { current: ifrCurrent, expiresDate: ifrExpiry, expiresInDays: ifrExpiresInDays, approachesInWindow: totalApproaches, holdInWindow: !!lastHold, lastHoldDate: lastHold, ipcDate: lastIpc },
+    dayLanding,
+    nightLanding,
     medical:      { current: medicalCurrent, expiresDate: medicalDate, daysUntilExpiry: medicalDaysUntilExpiry },
     bfr:          { current: bfrCurrent, accomplishedDate: bfrDate, expiresDate: bfrExpiresDate, daysUntilExpiry: bfrDaysUntilExpiry },
     lastImportAt:   u.last_foreflight_import_at,
@@ -331,6 +312,46 @@ async function getCostSummary(partnershipId, period) {
   };
 }
 
+// Cost analysis for any date range (Ledger → Cost Analysis): aircraft costs from the ledger by
+// category (same categories as the monthly report), split into fixed costs and per-hour consumables
+// (fuel, TKS, oil), against the hours flown. No per-pilot allocation: fixed costs are shared
+// regardless of hours flown.
+const VARIABLE_COST_TYPES = ['one_time_fuel', 'tks', 'oil'];
+
+async function getCostAnalysis(partnershipId, startDate, endDate) {
+  const [{ rows: costRows }, { rows: flightRows }] = await Promise.all([
+    pool.query(`
+      SELECT entry_type, SUM(CASE WHEN direction = 'debit' THEN amount ELSE -amount END)::float AS total
+      FROM financial_ledger
+      WHERE partnership_id = $1 AND entry_type = ANY($2) AND effective_date >= $3 AND effective_date <= $4
+      GROUP BY entry_type
+      HAVING SUM(CASE WHEN direction = 'debit' THEN amount ELSE -amount END) <> 0
+      ORDER BY total DESC
+    `, [partnershipId, Object.keys(COST_CATEGORIES), startDate, endDate]),
+    pool.query(`
+      SELECT COALESCE(SUM(flight_time), 0)::float AS hours
+      FROM flights WHERE partnership_id = $1 AND flight_date >= $2 AND flight_date <= $3
+    `, [partnershipId, startDate, endDate]),
+  ]);
+  const { rows: [first] } = await pool.query(
+    `SELECT TO_CHAR(MIN(flight_date), 'YYYY-MM-DD') AS d FROM flights WHERE partnership_id = $1`, [partnershipId]);
+  const totalCost = costRows.reduce((s, r) => s + r.total, 0);
+  const variableCost = costRows.filter(r => VARIABLE_COST_TYPES.includes(r.entry_type)).reduce((s, r) => s + r.total, 0);
+  const totalHours = flightRows.reduce((s, r) => s + r.hours, 0);
+  return {
+    start_date: startDate, end_date: endDate,
+    first_flight_date: first?.d ?? null, // flights logged in the app start here; hours before it are missing
+    total_hours: totalHours,
+    total_cost: totalCost,
+    fixed_cost: totalCost - variableCost,
+    variable_cost: variableCost,
+    cost_per_hour: totalHours > 0 ? totalCost / totalHours : 0,
+    by_category: costRows.map(r => ({
+      category: COST_CATEGORIES[r.entry_type], total: r.total, variable: VARIABLE_COST_TYPES.includes(r.entry_type),
+    })),
+  };
+}
+
 // Calendar-date-due recurring maintenance items, soonest first. There's no hours-based due
 // tracking (e.g. 100-hr inspection interval) in the schema today.
 async function getUpcomingMaintenance(partnershipId) {
@@ -355,6 +376,19 @@ async function getCurrentFlightHours(partnershipId) {
   return r?.hrs ?? null;
 }
 
+// The logbook entries recording when each tracked item was last done, keyed by item id.
+async function trackerEntryLinks(column, ids) {
+  if (!ids.length) return {};
+  const { rows } = await pool.query(`
+    SELECT l.${column} AS item_id, e.id, TO_CHAR(e.entry_date, 'YYYY-MM-DD') AS entry_date, e.category, e.page_number, e.summary
+    FROM tracker_logbook_links l JOIN logbook_entries e ON e.id = l.entry_id
+    WHERE l.${column} = ANY($1)
+    ORDER BY e.entry_date, e.category`, [ids]);
+  const out = {};
+  for (const { item_id, ...entry } of rows) (out[item_id] ||= []).push(entry);
+  return out;
+}
+
 async function getHourIntervals(partnershipId) {
   const current = await getCurrentFlightHours(partnershipId);
   const { rows } = await pool.query(`
@@ -369,7 +403,8 @@ async function getHourIntervals(partnershipId) {
       : hours_remaining < 0 ? 'overdue' : hours_remaining <= r.warn_hours ? 'due_soon' : 'ok';
     return { ...r, next_due_hours: +next_due_hours.toFixed(1), hours_remaining, status };
   }).sort((a, b) => (a.hours_remaining ?? Infinity) - (b.hours_remaining ?? Infinity));
-  return { current_hours: current, items };
+  const links = await trackerEntryLinks('interval_id', items.map(i => i.id));
+  return { current_hours: current, items: items.map(i => ({ ...i, logbook_entries: links[i.id] ?? [] })) };
 }
 
 // Date-based inspections/expirations (annual, ELT, avionics checks, CAPS repack, registration…).
@@ -383,10 +418,24 @@ async function getInspections(partnershipId) {
     FROM inspection_items
     WHERE partnership_id = $1 AND active
     ORDER BY due_date ASC NULLS LAST, title`, [partnershipId]);
-  return rows.map(r => ({
+  const links = await trackerEntryLinks('inspection_item_id', rows.map(r => r.id));
+  // The Navigation database is tracked from Maintenance → Databases (it's what IFR navigation needs);
+  // its expiration shows here read-only so it is flagged with everything else.
+  const { rows: nav } = await pool.query(`
+    SELECT 'database:' || d.id AS id, 'database' AS source,
+           'Navigation database' || COALESCE(' (cycle ' || d.cycle || ')', '') AS title,
+           'Required current for IFR GPS navigation. Update it and record the new cycle on the Databases tab.' AS notes,
+           NULL::int AS interval_months, d.warn_days,
+           (SELECT TO_CHAR(MAX(u.updated_on), 'YYYY-MM-DD') FROM avionics_database_updates u WHERE u.database_id = d.id) AS last_done_date,
+           TO_CHAR(d.expires_date, 'YYYY-MM-DD') AS due_date,
+           (d.expires_date - CURRENT_DATE) AS days_until
+      FROM avionics_databases d
+     WHERE d.partnership_id = $1 AND lower(d.name) = 'navigation'`, [partnershipId]);
+  return [...rows, ...nav].map(r => ({
     ...r,
+    logbook_entries: links[r.id] ?? [],
     status: r.due_date == null ? 'no_date' : r.days_until < 0 ? 'overdue' : r.days_until <= r.warn_days ? 'due_soon' : 'ok',
-  }));
+  })).sort((a, b) => (a.due_date ?? '9999') < (b.due_date ?? '9999') ? -1 : (a.due_date ?? '9999') > (b.due_date ?? '9999') ? 1 : a.title.localeCompare(b.title));
 }
 
 // What the Dashboard / scheduler need to know about the aircraft right now: a major open
@@ -491,7 +540,7 @@ async function buildMonthlyReportHtml(partnershipId) {
     return `
       <h3 style="margin:24px 0 8px;">${m.name}</h3>
       <table style="border-collapse:collapse;font-size:14px;">
-        ${currencyRow('IFR (6 approaches / 6mo)', currency.ifr)}
+        ${currencyRow('IFR (6 approaches + hold / 6mo)', currency.ifr)}
         ${currencyRow('Day landings (3 / 90 days)', currency.dayLanding)}
         ${currencyRow('Night landings (3 / 90 days)', currency.nightLanding)}
         ${currencyRow('Medical', currency.medical)}
@@ -575,6 +624,7 @@ module.exports = {
   getHoursSummary,
   getMemberUsage,
   getMaintenanceCostSummary,
+  getCostAnalysis,
   getReportPeriod,
   getCostSummary,
   getUpcomingMaintenance,

@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { EngineTrends } from '@/components/EngineTrends'
+import { OilAnalysis } from '@/components/OilAnalysis'
+import { AvionicsDatabases } from '@/components/AvionicsDatabases'
 import { Select } from '@/components/ui/select'
-import { useNavigate, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, Camera, Paperclip, Plus, X, RefreshCw, Download, FileText } from 'lucide-react'
-import { api, logbookApi, type Squawk, type MaintenanceEntry, type MaintenanceRecurring, type MaintenanceInterval, type InspectionItem, type CostAnalysis, type MaintenanceAttachment, type LogbookEntry, type LogbookDocument, type LogbookCategory, type LogbookCitation } from '@/lib/api'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { useUrlState } from '@/lib/navigation'
+import { AlertTriangle, Camera, Paperclip, Plus, X, Download, FileText, FlaskConical, Receipt, BookOpen } from 'lucide-react'
+import { api, logbookApi, type Squawk, type MaintenanceInterval, type InspectionItem, type MaintenanceAttachment, type LogbookEntry, type LogbookDocument, type LogbookCategory, type LogbookCitation, type TrackerLogbookEntry, type AdItem, type AdListResponse } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Input, openPicker } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -11,12 +14,11 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-type Tab = 'squawks' | 'log' | 'logbook' | 'engine'
+type Tab = 'squawks' | 'tracking' | 'logbook' | 'oil' | 'engine' | 'databases'
+const TABS: readonly Tab[] = ['squawks', 'tracking', 'logbook', 'oil', 'engine', 'databases']
+const TAB_LABELS: Record<Tab, string> = { squawks: 'Squawks', tracking: 'Tracking', logbook: 'Logbooks', oil: 'Oil', engine: 'Data Logs', databases: 'Databases' }
 type SquawkStatus = 'open' | 'in_progress' | 'resolved'
 type Severity = 'major' | 'minor' | 'note'
-
-const CATEGORIES = ['maintenance', 'insurance', 'avionics', 'hangar', 'fuel', 'misc'] as const
-type Category = typeof CATEGORIES[number]
 
 const SEVERITY_STYLES: Record<Severity, string> = {
   major: 'border-destructive bg-destructive/10 text-destructive',
@@ -42,13 +44,6 @@ const STATUS_LABEL: Record<SquawkStatus, string> = {
   resolved:    'Resolved',
 }
 
-const TODAY = new Date().toISOString().slice(0, 10)
-const CURRENT_YEAR = new Date().getFullYear()
-
-function fmt(n: number) {
-  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-}
-
 async function uploadAttachment(file: File, parentType: 'log' | 'squawk', parentId: string) {
   const fd = new FormData()
   fd.append('file', file)
@@ -70,17 +65,6 @@ function FF({ label, children }: { label: React.ReactNode; children: React.React
 
 function Opt() {
   return <span className="font-normal text-muted-foreground">(optional)</span>
-}
-
-function CatSelect({ value, onChange }: { value: Category; onChange: (v: Category) => void }) {
-  return (
-    <Select value={value} onChange={e => onChange(e.target.value as Category)}
-      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring">
-      {CATEGORIES.map(c => (
-        <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-      ))}
-    </Select>
-  )
 }
 
 // ── AttachButton ─────────────────────────────────────────────────────────────
@@ -397,348 +381,85 @@ function SquawksTab({ showAdd, setShowAdd, pendingAddFiles, setPendingAddFiles }
   )
 }
 
-// ── Cost Analysis Section ────────────────────────────────────────────────────
+// ── Tracking tab ─────────────────────────────────────────────────────────────
+// What's coming due: calendar inspections & expirations, and hour-based intervals, each linked to
+// the logbook entry that records when it was last done. (Costs live in the Ledger.)
 
-function CostAnalysisSection() {
-  const [rangeMode, setRangeMode] = useState<'ytd' | 'custom'>('ytd')
-  const [startDate, setStartDate] = useState(`${CURRENT_YEAR}-01-01`)
-  const [endDate, setEndDate]     = useState(TODAY)
-  const [data, setData]           = useState<CostAnalysis | null>(null)
-  const [expanded, setExpanded]   = useState(false)
-  const [loading, setLoading]     = useState(false)
-
-  useEffect(() => {
-    setLoading(true)
-    api.get<CostAnalysis>(`/maintenance/cost-analysis?start=${startDate}&end=${endDate}`)
-      .then(setData).catch(() => {}).finally(() => setLoading(false))
-  }, [startDate, endDate])
-
-  function applyYtd() {
-    setRangeMode('ytd')
-    setStartDate(`${CURRENT_YEAR}-01-01`)
-    setEndDate(TODAY)
-  }
-
-  if (loading) return <div className="rounded-lg border bg-muted/30 p-3 text-sm text-muted-foreground">Loading analysis…</div>
-  if (!data) return null
-
-  const hasCosts = data.total_cost > 0
-  const hasHours = data.total_hours > 0
-
-  const rangeLabel = rangeMode === 'ytd'
-    ? `YTD ${CURRENT_YEAR}`
-    : `${data.start_date} – ${data.end_date}`
-
-  return (
-    <div className="rounded-lg border bg-muted/30">
-      <button type="button" className="flex w-full items-center justify-between p-3" onClick={() => setExpanded(v => !v)}>
-        <span className="text-sm font-medium">Cost Analysis · {rangeLabel}</span>
-        <span className="text-sm tabular-nums font-medium">{hasCosts ? `$${fmt(data.total_cost)}` : 'No costs'}</span>
-      </button>
-
-      {expanded && (
-        <div className="border-t px-3 pb-3 pt-2 space-y-3">
-          {/* Range selector */}
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <button type="button" onClick={applyYtd}
-                className={cn('rounded-full border px-3 py-1 text-xs transition-colors',
-                  rangeMode === 'ytd' ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border text-muted-foreground'
-                )}>YTD</button>
-              <button type="button" onClick={() => setRangeMode('custom')}
-                className={cn('rounded-full border px-3 py-1 text-xs transition-colors',
-                  rangeMode === 'custom' ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border text-muted-foreground'
-                )}>Custom</button>
-            </div>
-            {rangeMode === 'custom' && (
-              <div className="grid grid-cols-2 gap-2">
-                <div className="space-y-1">
-                  <Label className="text-xs">From</Label>
-                  <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="h-8 text-xs" />
-                </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">To</Label>
-                  <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="h-8 text-xs" />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {(hasHours || hasCosts) && (
-            <div className="flex gap-4 text-sm">
-              <div>
-                <p className="text-xl font-bold tabular-nums">{data.total_hours.toFixed(1)}</p>
-                <p className="text-xs text-muted-foreground">hobbs hrs</p>
-              </div>
-              {hasCosts && hasHours && (
-                <div>
-                  <p className="text-xl font-bold tabular-nums">${fmt(data.cost_per_hour)}</p>
-                  <p className="text-xs text-muted-foreground">/ hr</p>
-                </div>
-              )}
-            </div>
-          )}
-
-          {hasCosts && (
-            <div className="space-y-1">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Fixed costs</span>
-                <span className="tabular-nums font-medium">${fmt(data.fixed_cost)}</span>
-              </div>
-              {data.by_category.filter(r => r.category !== 'fuel').map(r => (
-                <div key={r.category} className="flex justify-between pl-3 text-xs text-muted-foreground">
-                  <span className="capitalize">{r.category}</span>
-                  <span className="tabular-nums">${fmt(r.total)}</span>
-                </div>
-              ))}
-              {data.variable_cost > 0 && (
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Variable (fuel)</span>
-                  <span className="tabular-nums font-medium">${fmt(data.variable_cost)}</span>
-                </div>
-              )}
-            </div>
-          )}
-
-          {data.pilots.length > 0 && hasCosts && (
-            <div className="space-y-2 border-t pt-2">
-              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Per Pilot</p>
-              {data.pilots.map(p => {
-                const fixedShare = data.fixed_cost * (p.pct / 100)
-                const varShare   = data.variable_cost * (p.pct / 100)
-                return (
-                  <div key={p.pilot_id} className="rounded-md bg-background p-2 space-y-1">
-                    <div className="flex justify-between text-sm font-medium">
-                      <span>{p.pilot_name}</span>
-                      <span className="tabular-nums">${fmt(fixedShare + varShare)}</span>
-                    </div>
-                    <div className="text-xs text-muted-foreground">{p.hours.toFixed(1)} hrs ({p.pct.toFixed(0)}%)</div>
-                    <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground">
-                      <span>Fixed: <span className="tabular-nums text-foreground">${fmt(fixedShare)}</span></span>
-                      {data.variable_cost > 0 && <span>Fuel: <span className="tabular-nums text-foreground">${fmt(varShare)}</span></span>}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-
-          {!hasCosts && !hasHours && <p className="text-sm text-muted-foreground">No data for this period</p>}
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ── Cost Log tab ─────────────────────────────────────────────────────────────
-
-interface MaintenanceTabProps {
-  showAddEntry: boolean
-  setShowAddEntry: (v: boolean) => void
-  showRecurring: boolean
-  pendingAddFiles: File[]
-  setPendingAddFiles: React.Dispatch<React.SetStateAction<File[]>>
-}
-
-function MaintenanceTab({ showAddEntry, setShowAddEntry, showRecurring, pendingAddFiles, setPendingAddFiles }: MaintenanceTabProps) {
-  const [entries, setEntries]           = useState<MaintenanceEntry[]>([])
-  const [loading, setLoading]           = useState(true)
-  const [expandedId, setExpandedId]     = useState<string | null>(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-  const [saving, setSaving]             = useState(false)
-  const [error, setError]               = useState('')
-  const [attachReloadKey, setAttachReloadKey] = useState(0)
-
-  const [addDate, setAddDate]           = useState(TODAY)
-  const [addCategory, setAddCategory]   = useState<Category>('maintenance')
-  const [addTitle, setAddTitle]         = useState('')
-  const [addDesc, setAddDesc]           = useState('')
-  const [addCost, setAddCost]           = useState('0.00')
-  const [addTach, setAddTach]           = useState('')
-  const [addPerformedBy, setAddPerformedBy] = useState('')
-  const [addError, setAddError]         = useState('')
-  const [addSaving, setAddSaving]       = useState(false)
-
-  const [editDate, setEditDate]         = useState('')
-  const [editCategory, setEditCategory] = useState<Category>('maintenance')
-  const [editTitle, setEditTitle]       = useState('')
-  const [editDesc, setEditDesc]         = useState('')
-  const [editCost, setEditCost]         = useState('')
-  const [editTach, setEditTach]         = useState('')
-  const [editPerformedBy, setEditPerformedBy] = useState('')
-  const [editPendingFiles, setEditPendingFiles] = useState<File[]>([])
-
-  async function load() {
-    setLoading(true)
-    try { setEntries(await api.get<MaintenanceEntry[]>('/maintenance')) }
-    catch { setError('Failed to load') }
-    finally { setLoading(false) }
-  }
-
-  useEffect(() => { load() }, [])
-
-  function startEdit(e: MaintenanceEntry) {
-    setExpandedId(e.id); setConfirmDeleteId(null)
-    setEditDate(e.entry_date); setEditCategory(e.category as Category)
-    setEditTitle(e.title); setEditDesc(e.description ?? '')
-    setEditCost(e.cost_amount ?? '0.00'); setEditTach(e.tach_at_service ?? '')
-    setEditPerformedBy(e.performed_by ?? '')
-    setEditPendingFiles([])
-  }
-
-  async function handleSave(e: FormEvent) {
-    e.preventDefault()
-    if (!expandedId) return
-    setSaving(true)
-    try {
-      await api.patch<MaintenanceEntry>(`/maintenance/${expandedId}`, {
-        entry_date: editDate, category: editCategory, title: editTitle,
-        description: editDesc || null,
-        cost_amount: parseFloat(editCost) || 0,
-        tach_at_service: editTach ? parseFloat(editTach) : null,
-        performed_by: editPerformedBy || null,
-      })
-      if (editPendingFiles.length) {
-        await Promise.all(editPendingFiles.map(f => uploadAttachment(f, 'log', expandedId)))
-        setEditPendingFiles([])
-        setAttachReloadKey(k => k + 1)
-      }
-      setExpandedId(null); await load()
-    } catch { setError('Failed to save') }
-    finally { setSaving(false) }
-  }
-
-  async function handleDelete(id: string) {
-    try { await api.delete(`/maintenance/${id}`); setExpandedId(null); setConfirmDeleteId(null); await load() }
-    catch { setError('Failed to delete') }
-  }
-
-  function resetAdd() {
-    setAddDate(TODAY); setAddCategory('maintenance'); setAddTitle('')
-    setAddDesc(''); setAddCost('0.00'); setAddTach(''); setAddPerformedBy('')
-    setAddError(''); setPendingAddFiles([]); setShowAddEntry(false)
-  }
-
-  async function handleAdd(e: FormEvent) {
-    e.preventDefault()
-    if (!addTitle.trim()) { setAddError('Title required'); return }
-    setAddSaving(true)
-    try {
-      const entry = await api.post<MaintenanceEntry>('/maintenance', {
-        entry_date: addDate, category: addCategory, title: addTitle.trim(),
-        description: addDesc || null,
-        cost_amount: parseFloat(addCost) || 0,
-        tach_at_service: addTach ? parseFloat(addTach) : null,
-        performed_by: addPerformedBy || null,
-      })
-      if (pendingAddFiles.length) {
-        await Promise.all(pendingAddFiles.map(f => uploadAttachment(f, 'log', entry.id)))
-      }
-      resetAdd(); await load()
-    } catch { setAddError('Failed to save') }
-    finally { setAddSaving(false) }
-  }
-
+function TrackingTab() {
   return (
     <div className="space-y-3 p-4">
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
       <InspectionsSection />
-
       <HourIntervalsSection />
-
-      {showRecurring && <RecurringSection onPosted={load} />}
-
-      {showAddEntry && (
-        <form onSubmit={handleAdd} className="rounded-lg border border-primary/40 bg-primary/5 p-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-medium">New entry</p>
-            <button type="button" onClick={resetAdd}><X className="h-4 w-4 text-muted-foreground" /></button>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <FF label="Date"><Input type="date" value={addDate} onChange={e => setAddDate(e.target.value)} required /></FF>
-            <FF label="Category"><CatSelect value={addCategory} onChange={v => setAddCategory(v)} /></FF>
-          </div>
-          <FF label="Title"><Input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="Annual inspection, Insurance premium…" required /></FF>
-          <FF label={<>Description <Opt /></>}><Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)} rows={2} /></FF>
-          <div className="grid grid-cols-2 gap-3">
-            <FF label="Cost ($)"><Input type="number" step="0.01" min="0" value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" /></FF>
-            <FF label={<>Hobbs <Opt /></>}><Input type="number" step="0.1" min="0" value={addTach} onChange={e => setAddTach(e.target.value)} placeholder="1849.2" /></FF>
-          </div>
-          <FF label={<>Performed by <Opt /></>}><Input value={addPerformedBy} onChange={e => setAddPerformedBy(e.target.value)} placeholder="KPAO Avionics, self…" /></FF>
-          <AttachButton onFiles={fs => setPendingAddFiles(prev => [...prev, ...fs])} />
-          <StagedFileList files={pendingAddFiles} onRemove={i => setPendingAddFiles(prev => prev.filter((_, j) => j !== i))} />
-          {addError && <p className="text-xs text-destructive">{addError}</p>}
-          <Button type="submit" size="sm" className="w-full" disabled={addSaving}>{addSaving ? 'Saving…' : 'Add entry'}</Button>
-        </form>
-      )}
-
-      {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
-      ) : entries.length === 0 && !showAddEntry ? (
-        <p className="text-sm text-muted-foreground">No entries yet. Use + Add to create one.</p>
-      ) : (
-        <ul className="space-y-2">
-          {entries.map(entry => {
-            const d = new Date(entry.entry_date + 'T12:00:00')
-            return (
-              <li key={entry.id} className="rounded-lg border bg-card">
-                <button type="button" className="flex w-full items-start gap-3 p-3 text-left"
-                  onClick={() => expandedId === entry.id ? setExpandedId(null) : startEdit(entry)}>
-                  <div className="flex w-9 shrink-0 flex-col items-center rounded-md bg-muted py-1 text-center">
-                    <span className="text-[9px] uppercase text-muted-foreground">{d.toLocaleDateString('en-US', { month: 'short' })}</span>
-                    <span className="text-base font-bold leading-none">{d.getDate()}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="truncate text-sm font-medium">{entry.title}</p>
-                    <Badge variant="outline" className="mt-1 text-[10px] px-1.5 py-0 capitalize">{entry.category}</Badge>
-                  </div>
-                  {entry.cost_amount && (
-                    <span className="shrink-0 text-sm font-medium tabular-nums">${fmt(parseFloat(entry.cost_amount))}</span>
-                  )}
-                </button>
-
-                {expandedId === entry.id && (
-                  <form onSubmit={handleSave} className="border-t px-3 pb-3 pt-2 space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <FF label="Date"><Input type="date" value={editDate} onChange={e => setEditDate(e.target.value)} required /></FF>
-                      <FF label="Category"><CatSelect value={editCategory} onChange={v => setEditCategory(v)} /></FF>
-                    </div>
-                    <FF label="Title"><Input value={editTitle} onChange={e => setEditTitle(e.target.value)} required /></FF>
-                    <FF label={<>Description <Opt /></>}><Textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows={2} /></FF>
-                    <div className="grid grid-cols-2 gap-3">
-                      <FF label="Cost ($)"><Input type="number" step="0.01" min="0" value={editCost} onChange={e => setEditCost(e.target.value)} /></FF>
-                      <FF label={<>Hobbs <Opt /></>}><Input type="number" step="0.1" min="0" value={editTach} onChange={e => setEditTach(e.target.value)} /></FF>
-                    </div>
-                    <FF label={<>Performed by <Opt /></>}><Input value={editPerformedBy} onChange={e => setEditPerformedBy(e.target.value)} /></FF>
-                    <AttachButton onFiles={fs => setEditPendingFiles(prev => [...prev, ...fs])} />
-                    <StagedFileList files={editPendingFiles} onRemove={i => setEditPendingFiles(prev => prev.filter((_, j) => j !== i))} />
-                    <div className="flex gap-2">
-                      <Button type="submit" size="sm" className="flex-1" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
-                      <Button type="button" variant="outline" size="sm" onClick={() => setExpandedId(null)}>Cancel</Button>
-                    </div>
-                    <AttachmentStrip parentType="log" parentId={entry.id} reloadKey={attachReloadKey} />
-                    <div className="border-t pt-2 text-center">
-                      {confirmDeleteId === entry.id ? (
-                        <button type="button" className="text-xs font-medium text-destructive" onClick={() => handleDelete(entry.id)}>Confirm delete</button>
-                      ) : (
-                        <button type="button" className="text-xs text-muted-foreground hover:text-destructive" onClick={() => setConfirmDeleteId(entry.id)}>Delete entry</button>
-                      )}
-                    </div>
-                  </form>
-                )}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-
-      <CostAnalysisSection />
     </div>
   )
 }
 
-// ── Recurring section (inline, no tab) ───────────────────────────────────────
+// ── Tracking sections ────────────────────────────────────────────────────────
+
+const fmtShortDate = (d: string) =>
+  new Date(d + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+
+// Links from a tracked item to the logbook entries recording when it was last done. One link per
+// logbook and date (two airframe entries on the same day are one link); it opens the entry — or
+// that day's entries, with Previous/Next — in a pop-up right here.
+function TrackerLogbookLinks({ entries, labelFor }: {
+  entries: TrackerLogbookEntry[]
+  labelFor?: (e: TrackerLogbookEntry) => React.ReactNode
+}) {
+  const [open, setOpen] = useState<LogbookEntry[] | null>(null)
+  const [index, setIndex] = useState(0)
+  const [loadingKey, setLoadingKey] = useState<string | null>(null)
+  if (!entries.length) return null
+
+  const groups: { key: string; items: TrackerLogbookEntry[] }[] = []
+  for (const e of entries) {
+    const key = `${e.category}|${e.entry_date ?? ''}`
+    const g = groups.find(x => x.key === key)
+    if (g) g.items.push(e)
+    else groups.push({ key, items: [e] })
+  }
+
+  async function show(key: string, ids: string[]) {
+    setLoadingKey(key)
+    try {
+      const all = await logbookApi.entries({ order: 'asc' })
+      const found = ids.map(id => all.find(e => e.id === id)).filter((e): e is LogbookEntry => !!e)
+      if (found.length) { setIndex(0); setOpen(found) }
+    } finally { setLoadingKey(null) }
+  }
+
+  return (
+    <>
+      <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+        {groups.map(({ key, items }) => {
+          const e = items[0]
+          return (
+            <button key={key} type="button" onClick={() => show(key, items.map(x => x.id))}
+              title={items.map(x => x.summary).join('\n')}
+              className="flex items-center gap-1 text-[11px] text-primary hover:underline disabled:opacity-60"
+              disabled={loadingKey === key}>
+              <BookOpen className="h-3 w-3" />
+              {labelFor ? labelFor(e) : <>
+                {LOGBOOK_CATEGORY_LABELS[e.category]} log
+                {e.entry_date && <> · {fmtShortDate(e.entry_date)}</>}
+              </>}
+              {items.length > 1 && <span className="text-muted-foreground">({items.length} entries)</span>}
+            </button>
+          )
+        })}
+      </div>
+      {open && (
+        <LogbookEntryModal
+          entries={open}
+          index={index}
+          onClose={() => setOpen(null)}
+          onNavigate={setIndex}
+          onSaved={updated => setOpen(prev => prev && prev.map(x => x.id === updated.id ? { ...x, ...updated, source_filename: x.source_filename } : x))}
+        />
+      )}
+    </>
+  )
+}
 
 function InspectionsSection() {
   const [items, setItems]   = useState<InspectionItem[]>([])
@@ -828,6 +549,14 @@ function InspectionsSection() {
                 <p className="min-w-0 flex-1 truncate text-sm font-medium">{i.title}</p>
                 <span className={`shrink-0 text-xs tabular-nums ${tone(i.status)}`}>{label(i)}</span>
               </div>
+              {i.source === 'database' ? (
+                <div className="mt-1.5 flex items-center gap-2">
+                  <span className="text-xs tabular-nums">{i.due_date ? `expires ${i.due_date}` : 'no expiration set'}</span>
+                  <span className="text-[11px] text-muted-foreground">{i.last_done_date ? `last updated ${i.last_done_date}` : ''}</span>
+                  <span className="flex-1" />
+                  <Link to="/maintenance?tab=databases" className="shrink-0 text-xs font-medium text-primary">Databases →</Link>
+                </div>
+              ) : (
               <div className="mt-1.5 flex items-center gap-2">
                 <input
                   type="date"
@@ -846,7 +575,9 @@ function InspectionsSection() {
                 ) : null}
                 <button type="button" className="shrink-0 text-xs text-muted-foreground hover:text-destructive" onClick={() => remove(i.id)}>✕</button>
               </div>
+              )}
               {i.notes && <p className="mt-1 text-[11px] text-muted-foreground">{i.notes}</p>}
+              <TrackerLogbookLinks entries={i.logbook_entries ?? []} />
             </li>
           ))}
         </ul>
@@ -947,7 +678,8 @@ function HourIntervalsSection() {
       ) : (
         <ul className="space-y-2">
           {items.map(i => (
-            <li key={i.id} className="flex items-center gap-2 rounded-md border bg-background p-2.5">
+            <li key={i.id} className="rounded-md border bg-background p-2.5">
+              <div className="flex items-center gap-2">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-medium">{i.title}</p>
                 <p className="text-xs text-muted-foreground">
@@ -963,185 +695,9 @@ function HourIntervalsSection() {
                 {busyId === i.id ? '…' : 'Done'}
               </Button>
               <button type="button" className="shrink-0 text-xs text-muted-foreground hover:text-destructive" onClick={() => remove(i.id)}>✕</button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function RecurringSection({ onPosted }: { onPosted: () => void }) {
-  const [items, setItems]               = useState<MaintenanceRecurring[]>([])
-  const [loading, setLoading]           = useState(true)
-  const [expandedId, setExpandedId]     = useState<string | null>(null)
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-  const [saving, setSaving]             = useState(false)
-  const [posting, setPosting]           = useState<string | null>(null)
-  const [error, setError]               = useState('')
-
-  const [showAdd, setShowAdd]           = useState(false)
-  const [addCategory, setAddCategory]   = useState<Category>('hangar')
-  const [addTitle, setAddTitle]         = useState('')
-  const [addDesc, setAddDesc]           = useState('')
-  const [addCost, setAddCost]           = useState('')
-  const [addDay, setAddDay]             = useState('1')
-  const [addDue, setAddDue]             = useState(TODAY)
-  const [addError, setAddError]         = useState('')
-  const [addSaving, setAddSaving]       = useState(false)
-
-  const [editCategory, setEditCategory] = useState<Category>('hangar')
-  const [editTitle, setEditTitle]       = useState('')
-  const [editDesc, setEditDesc]         = useState('')
-  const [editCost, setEditCost]         = useState('')
-  const [editDay, setEditDay]           = useState('1')
-  const [editDue, setEditDue]           = useState('')
-
-  async function load() {
-    setLoading(true)
-    try { setItems(await api.get<MaintenanceRecurring[]>('/maintenance/recurring')) }
-    catch { setError('Failed to load') }
-    finally { setLoading(false) }
-  }
-
-  useEffect(() => { load() }, [])
-
-  function startEdit(r: MaintenanceRecurring) {
-    setExpandedId(r.id); setConfirmDeleteId(null)
-    setEditCategory(r.category as Category); setEditTitle(r.title)
-    setEditDesc(r.description ?? ''); setEditCost(r.cost_amount)
-    setEditDay(String(r.day_of_month)); setEditDue(r.next_due_date)
-  }
-
-  async function handleSave(e: FormEvent) {
-    e.preventDefault()
-    if (!expandedId) return
-    setSaving(true)
-    try {
-      await api.patch<MaintenanceRecurring>(`/maintenance/recurring/${expandedId}`, {
-        category: editCategory, title: editTitle, description: editDesc || null,
-        cost_amount: parseFloat(editCost), day_of_month: parseInt(editDay), next_due_date: editDue,
-      })
-      setExpandedId(null); await load()
-    } catch { setError('Failed to save') }
-    finally { setSaving(false) }
-  }
-
-  async function handlePost(id: string) {
-    setPosting(id)
-    try { await api.post(`/maintenance/recurring/${id}/post`, {}); await load(); onPosted() }
-    catch { setError('Failed to post') }
-    finally { setPosting(null) }
-  }
-
-  async function handleDelete(id: string) {
-    try { await api.delete(`/maintenance/recurring/${id}`); setExpandedId(null); setConfirmDeleteId(null); await load() }
-    catch { setError('Failed to delete') }
-  }
-
-  function resetAdd() {
-    setAddCategory('hangar'); setAddTitle(''); setAddDesc('')
-    setAddCost(''); setAddDay('1'); setAddDue(TODAY)
-    setAddError(''); setShowAdd(false)
-  }
-
-  async function handleAdd(e: FormEvent) {
-    e.preventDefault()
-    if (!addTitle.trim()) { setAddError('Title required'); return }
-    if (!addCost || parseFloat(addCost) <= 0) { setAddError('Cost must be positive'); return }
-    setAddSaving(true)
-    try {
-      await api.post<MaintenanceRecurring>('/maintenance/recurring', {
-        category: addCategory, title: addTitle.trim(), description: addDesc || null,
-        cost_amount: parseFloat(addCost), day_of_month: parseInt(addDay) || 1, next_due_date: addDue,
-      })
-      resetAdd(); await load()
-    } catch { setAddError('Failed to save') }
-    finally { setAddSaving(false) }
-  }
-
-  return (
-    <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm font-medium text-muted-foreground">Recurring costs</p>
-        <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => setShowAdd(v => !v)}>
-          <Plus className="h-3.5 w-3.5" /> Add
-        </Button>
-      </div>
-
-      {error && <p className="text-xs text-destructive">{error}</p>}
-
-      {showAdd && (
-        <form onSubmit={handleAdd} className="rounded-md border bg-background p-3 space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <FF label="Category"><CatSelect value={addCategory} onChange={v => setAddCategory(v)} /></FF>
-            <FF label="Cost ($)"><Input type="number" step="0.01" min="0.01" value={addCost} onChange={e => setAddCost(e.target.value)} placeholder="0.00" required /></FF>
-          </div>
-          <FF label="Title"><Input value={addTitle} onChange={e => setAddTitle(e.target.value)} placeholder="Hangar rent…" required /></FF>
-          <FF label={<>Description <Opt /></>}><Textarea value={addDesc} onChange={e => setAddDesc(e.target.value)} rows={2} /></FF>
-          <div className="grid grid-cols-2 gap-3">
-            <FF label="Day of month"><Input type="number" min="1" max="28" value={addDay} onChange={e => setAddDay(e.target.value)} required /></FF>
-            <FF label="Next due date"><Input type="date" value={addDue} onChange={e => setAddDue(e.target.value)} required /></FF>
-          </div>
-          {addError && <p className="text-xs text-destructive">{addError}</p>}
-          <div className="flex gap-2">
-            <Button type="submit" size="sm" className="flex-1" disabled={addSaving}>{addSaving ? 'Saving…' : 'Save'}</Button>
-            <Button type="button" variant="outline" size="sm" onClick={resetAdd}>Cancel</Button>
-          </div>
-        </form>
-      )}
-
-      {loading ? (
-        <p className="text-xs text-muted-foreground">Loading…</p>
-      ) : items.length === 0 && !showAdd ? (
-        <p className="text-xs text-muted-foreground">No recurring costs</p>
-      ) : (
-        <ul className="space-y-2">
-          {items.map(r => (
-            <li key={r.id} className="rounded-md border bg-background">
-              <div className="flex w-full items-center gap-2 p-2.5">
-                <button type="button" className="flex flex-1 items-center gap-2 text-left min-w-0"
-                  onClick={() => expandedId === r.id ? setExpandedId(null) : startEdit(r)}>
-                  <div className="flex-1 min-w-0">
-                    <p className="truncate text-sm font-medium">{r.title}</p>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 capitalize">{r.category}</Badge>
-                      <span className="text-xs text-muted-foreground">due {r.next_due_date}</span>
-                    </div>
-                  </div>
-                  <span className="shrink-0 text-sm tabular-nums">${fmt(parseFloat(r.cost_amount))}</span>
-                </button>
-                <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs px-2"
-                  disabled={posting === r.id} onClick={() => handlePost(r.id)}>
-                  {posting === r.id ? '…' : 'Post'}
-                </Button>
               </div>
-
-              {expandedId === r.id && (
-                <form onSubmit={handleSave} className="border-t px-3 pb-3 pt-2 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <FF label="Category"><CatSelect value={editCategory} onChange={v => setEditCategory(v)} /></FF>
-                    <FF label="Cost ($)"><Input type="number" step="0.01" min="0.01" value={editCost} onChange={e => setEditCost(e.target.value)} required /></FF>
-                  </div>
-                  <FF label="Title"><Input value={editTitle} onChange={e => setEditTitle(e.target.value)} required /></FF>
-                  <FF label={<>Description <Opt /></>}><Textarea value={editDesc} onChange={e => setEditDesc(e.target.value)} rows={2} /></FF>
-                  <div className="grid grid-cols-2 gap-3">
-                    <FF label="Day of month"><Input type="number" min="1" max="28" value={editDay} onChange={e => setEditDay(e.target.value)} required /></FF>
-                    <FF label="Next due date"><Input type="date" value={editDue} onChange={e => setEditDue(e.target.value)} required /></FF>
-                  </div>
-                  <div className="flex gap-2">
-                    <Button type="submit" size="sm" className="flex-1" disabled={saving}>{saving ? 'Saving…' : 'Save'}</Button>
-                    <Button type="button" variant="outline" size="sm" onClick={() => setExpandedId(null)}>Cancel</Button>
-                  </div>
-                  <div className="border-t pt-2 text-center">
-                    {confirmDeleteId === r.id ? (
-                      <button type="button" className="text-xs font-medium text-destructive" onClick={() => handleDelete(r.id)}>Confirm delete</button>
-                    ) : (
-                      <button type="button" className="text-xs text-muted-foreground hover:text-destructive" onClick={() => setConfirmDeleteId(r.id)}>Remove</button>
-                    )}
-                  </div>
-                </form>
-              )}
+              {i.description && <p className="mt-1 text-[11px] text-muted-foreground">{i.description}</p>}
+              <TrackerLogbookLinks entries={i.logbook_entries ?? []} />
             </li>
           ))}
         </ul>
@@ -1161,6 +717,7 @@ const LOGBOOK_CATEGORY_LABELS: Record<LogbookCategory, string> = {
 }
 
 const LOGBOOK_CATEGORY_ORDER: LogbookCategory[] = ['airframe', 'engine', 'prop', 'ad_sb_compliance', 'other']
+const LOGBOOK_FILTER_VALUES: readonly (LogbookCategory | 'all')[] = ['all', ...LOGBOOK_CATEGORY_ORDER]
 
 type ChatTurn = { question: string; answer: string; citations: LogbookCitation[] }
 
@@ -1215,13 +772,13 @@ function LogbookChat() {
                   {t.citations.map(c => (
                     <a
                       key={c.id}
-                      href={logbookApi.sourceUrl(c.document_id)}
+                      href={c.url ?? logbookApi.sourceUrl(c.document_id)}
                       target="_blank"
                       rel="noreferrer"
                       title={c.summary}
                       className="rounded-full border px-2 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
                     >
-                      {LOGBOOK_CATEGORY_LABELS[c.category]} · {c.source_filename} p.{c.page_number ?? '?'}
+                      {c.category === 'oil_analysis' ? 'Oil analysis' : LOGBOOK_CATEGORY_LABELS[c.category]} · {c.source_filename} p.{c.page_number ?? '?'}
                       {c.entry_date ? ` · ${c.entry_date}` : ''}
                     </a>
                   ))}
@@ -1238,7 +795,7 @@ function LogbookChat() {
         <Input
           value={question}
           onChange={e => setQuestion(e.target.value)}
-          placeholder="e.g. What's the history of cylinder compressions?"
+          placeholder="e.g. What's the history of cylinder compressions? Any trends in oil analysis?"
           className="text-sm"
         />
         <Button type="submit" size="sm" disabled={asking || !question.trim()}>
@@ -1271,8 +828,8 @@ function LogbookDateChip({ date }: { date: string | null }) {
 
 function LogbookEntryRow({ entry, onOpen }: { entry: LogbookEntry; onOpen: () => void }) {
   return (
-    <li className="rounded-lg border bg-card">
-      <button type="button" className="flex w-full items-start gap-3 p-3 text-left hover:bg-accent/40 transition-colors" onClick={onOpen}>
+    <li className="flex items-stretch rounded-lg border bg-card">
+      <button type="button" className="flex min-w-0 flex-1 items-start gap-3 p-3 text-left hover:bg-accent/40 transition-colors" onClick={onOpen}>
         <LogbookDateChip date={entry.entry_date} />
         <div className="flex-1 min-w-0">
           <p className="truncate text-sm font-medium">{entry.summary}</p>
@@ -1283,7 +840,53 @@ function LogbookEntryRow({ entry, onOpen }: { entry: LogbookEntry; onOpen: () =>
           </div>
         </div>
       </button>
+      {entry.oil_sample?.url && <OilSampleLink sample={entry.oil_sample} compact />}
+      {entry.invoices?.map(inv => <InvoiceLink key={inv.id} invoice={inv} compact />)}
     </li>
+  )
+}
+
+function OilSampleLink({ sample, compact }: { sample: NonNullable<LogbookEntry['oil_sample']>; compact?: boolean }) {
+  const when = new Date(sample.sample_date + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  const title = `Oil analysis sampled ${when} at ${sample.unit_hours} hrs${sample.lab_number ? ` (lab #${sample.lab_number})` : ''}${sample.flagged ? ' — lab flagged a value' : ''}`
+  if (compact) {
+    return (
+      <a href={sample.url!} target="_blank" rel="noreferrer" title={title}
+        className="flex w-16 shrink-0 flex-col items-center justify-center gap-0.5 border-l px-1 text-[10px] text-primary hover:bg-accent/40">
+        <FlaskConical className={`h-4 w-4 ${sample.flagged ? 'text-amber-500' : ''}`} />
+        Oil report
+      </a>
+    )
+  }
+  return (
+    <a href={sample.url!} target="_blank" rel="noreferrer" className="flex items-center gap-1.5 text-primary hover:underline">
+      <FlaskConical className={`h-3.5 w-3.5 ${sample.flagged ? 'text-amber-500' : ''}`} />
+      Oil analysis report ({when}, {sample.unit_hours} hrs{sample.flagged ? ', flagged' : ''}) →
+    </a>
+  )
+}
+
+function InvoiceLink({ invoice, compact }: { invoice: NonNullable<LogbookEntry['invoices']>[number]; compact?: boolean }) {
+  const href = `/invoices/${invoice.id}`
+  const when = invoice.invoice_date
+    ? new Date(invoice.invoice_date + 'T12:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+    : null
+  const title = `${invoice.vendor ? `${invoice.vendor} ` : ''}invoice ${invoice.invoice_number}${when ? ` (${when})` : ''}`
+  if (compact) {
+    return (
+      <Link to={href} title={title}
+        className="flex w-16 shrink-0 flex-col items-center justify-center gap-0.5 border-l px-1 text-[10px] text-primary hover:bg-accent/40">
+        <Receipt className="h-4 w-4" />
+        <span className="leading-tight">Invoice</span>
+        <span className="max-w-full truncate text-[9px] leading-tight text-muted-foreground">{invoice.invoice_number}</span>
+      </Link>
+    )
+  }
+  return (
+    <Link to={href} className="flex items-center gap-1.5 text-primary hover:underline">
+      <Receipt className="h-3.5 w-3.5" />
+      {title} →
+    </Link>
   )
 }
 
@@ -1413,6 +1016,8 @@ function LogbookEntryModal({
                 <a href={logbookApi.sourceUrl(entry.document_id)} target="_blank" rel="noreferrer" className="text-primary hover:underline">
                   View original scan →
                 </a>
+                {entry.oil_sample?.url && <div className="mt-1.5"><OilSampleLink sample={entry.oil_sample} /></div>}
+                {entry.invoices?.map(inv => <div key={inv.id} className="mt-1.5"><InvoiceLink invoice={inv} /></div>)}
               </div>
             </div>
           </div>
@@ -1536,17 +1141,168 @@ function LogbookImportForm({ onImported, onClose }: { onImported: () => void; on
   )
 }
 
+// ── AD/SB compliance list ───────────────────────────────────────────────────
+
+const AD_GROUPS: { key: AdItem['applies_to']; label: string }[] = [
+  { key: 'airframe', label: 'Airframe' },
+  { key: 'engine', label: 'Engine' },
+  { key: 'propeller', label: 'Propeller' },
+  { key: 'service_bulletin', label: 'Service Bulletins' },
+]
+type AdFilter = 'all' | 'complied' | 'recurring' | 'na'
+const AD_FILTERS: readonly AdFilter[] = ['all', 'complied', 'recurring', 'na']
+const AD_FILTER_LABELS: Record<AdFilter, string> = { all: 'All', complied: 'Complied', recurring: 'Recurring', na: 'N/A & superseded' }
+
+// An AD that is N/A or superseded doesn't recur for this aircraft, even when the report marks the
+// AD itself as recurring.
+const adRecurs = (i: AdItem) => i.recurring && i.status === 'complied'
+
+function adMatches(i: AdItem, f: AdFilter) {
+  return f === 'all' ? true
+    : f === 'complied' ? i.status === 'complied'
+    : f === 'recurring' ? adRecurs(i)
+    : i.status !== 'complied'
+}
+
+function AdStatusBadge({ item }: { item: AdItem }) {
+  const [text, cls] = item.status === 'complied' ? ['Complied', 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400']
+    : item.status === 'superseded' ? ['Superseded', 'text-muted-foreground']
+    : ['N/A', 'text-muted-foreground']
+  return <span className={cn('shrink-0 rounded-full border px-1.5 py-px text-[10px] font-medium', cls)}>{text}</span>
+}
+
+function AdNextDue({ item }: { item: AdItem }) {
+  if (item.next_due_hours == null && !item.next_due_date) return null
+  const left = item.hours_remaining
+  const tone = left == null ? 'text-muted-foreground'
+    : left < 0 ? 'text-destructive font-medium'
+    : left <= 25 ? 'text-amber-600 dark:text-amber-400 font-medium'
+    : 'text-foreground'
+  return (
+    <p className={cn('mt-1 text-[11px]', tone)}>
+      Next due{item.next_due_hours != null && <> at {item.next_due_hours.toFixed(1)} hrs</>}
+      {item.next_due_date && <> {item.next_due_hours != null ? 'or' : 'on'} {fmtShortDate(item.next_due_date)}</>}
+      {left != null && <> · {left < 0 ? `${Math.abs(left).toFixed(1)} hrs overdue` : `${left.toFixed(1)} hrs left`}</>}
+    </p>
+  )
+}
+
+function AdComplianceList() {
+  const [data, setData] = useState<AdListResponse | null>(null)
+  const [error, setError] = useState('')
+  const [filter, setFilter] = useUrlState<AdFilter>('adf', 'all', AD_FILTERS)
+
+  useEffect(() => { logbookApi.adItems().then(setData).catch(e => setError(e.message)) }, [])
+
+  if (error) return <p className="text-sm text-destructive">{error}</p>
+  if (!data) return <p className="text-sm text-muted-foreground">Loading…</p>
+  if (!data.items.length) return <p className="text-sm text-muted-foreground">No AD list yet.</p>
+
+  const { report, items } = data
+  const due = items.filter(i => i.next_due_hours != null || i.next_due_date)
+  const shown = items.filter(i => adMatches(i, filter))
+  // A report line reads "AD report p.2" (ADs) or "SB log · date" (SBs); a maintenance entry reads
+  // "Airframe log · date".
+  const reportKind = new Map(items.flatMap(i => i.entries.filter(e => e.role === 'report').map(e => [e.id, i.kind] as const)))
+  const entryLabel = (e: TrackerLogbookEntry) => {
+    const kind = reportKind.get(e.id)
+    if (kind === 'ad') return <>AD report{e.page_number ? ` p.${e.page_number}` : ''}</>
+    if (kind === 'sb') return <>SB log{e.entry_date && <> · {fmtShortDate(e.entry_date)}</>}</>
+    return <>{LOGBOOK_CATEGORY_LABELS[e.category]} log{e.entry_date && <> · {fmtShortDate(e.entry_date)}</>}</>
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="rounded-lg border bg-muted/20 p-3 space-y-1.5">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <p className="text-sm font-medium">
+            AD compliance report{report?.report_date && <> · {fmtShortDate(report.report_date)}</>}
+          </p>
+          {report && (
+            <a href={logbookApi.sourceUrl(report.id)} target="_blank" rel="noreferrer"
+              className="flex items-center gap-1 text-xs text-primary hover:underline">
+              <FileText className="h-3.5 w-3.5" /> View report
+            </a>
+          )}
+        </div>
+        {report?.report_hours && <p className="text-[11px] text-muted-foreground">{report.report_hours}</p>}
+        {due.map(i => (
+          <div key={i.id} className="text-xs">
+            <span className="font-mono font-medium">{i.kind === 'ad' ? 'AD ' : ''}{i.number}</span>{' '}
+            <span className="text-muted-foreground">{i.subject}</span>
+            <AdNextDue item={i} />
+          </div>
+        ))}
+        {data.current_hours != null && due.length > 0 && (
+          <p className="text-[11px] text-muted-foreground">Flight timer now {data.current_hours.toFixed(1)} hrs</p>
+        )}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {AD_FILTERS.map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={cn('rounded-full border px-3 py-1 text-xs transition-colors',
+              filter === f ? 'border-primary bg-primary/10 text-primary font-medium' : 'border-border text-muted-foreground')}>
+            {AD_FILTER_LABELS[f]} ({items.filter(i => adMatches(i, f)).length})
+          </button>
+        ))}
+      </div>
+
+      {AD_GROUPS.map(g => {
+        const rows = shown.filter(i => i.applies_to === g.key)
+        if (!rows.length) return null
+        return (
+          <section key={g.key} className="space-y-1.5">
+            <h3 className="px-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              {g.label} <span className="font-normal">({rows.length})</span>
+            </h3>
+            <ul className="divide-y rounded-lg border bg-background">
+              {rows.map(i => (
+                <li key={i.id} className={cn('px-3 py-2', i.status !== 'complied' && 'opacity-80')}>
+                  <div className="flex items-start gap-2">
+                    <span className="shrink-0 font-mono text-xs font-medium">{i.number}</span>
+                    <span className="min-w-0 flex-1 text-xs">{i.subject}</span>
+                    {adRecurs(i) && (
+                      <span className="shrink-0 rounded-full border border-primary/40 px-1.5 py-px text-[10px] font-medium text-primary"
+                        title={i.recurring_note ?? 'Recurring'}>Recurring</span>
+                    )}
+                    <AdStatusBadge item={i} />
+                  </div>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {[
+                      i.effective_date && `Eff ${fmtShortDate(i.effective_date)}`,
+                      i.method_of_compliance,
+                      i.status === 'complied' && i.complied_date &&
+                        `C/W ${fmtShortDate(i.complied_date)}${i.complied_hours != null ? ` @ ${i.complied_hours.toFixed(1)} hrs` : ''}`,
+                      i.recurring_note,
+                    ].filter(Boolean).join(' · ')}
+                  </p>
+                  <AdNextDue item={i} />
+                  <TrackerLogbookLinks entries={i.entries} labelFor={entryLabel} />
+                </li>
+              ))}
+            </ul>
+          </section>
+        )
+      })}
+    </div>
+  )
+}
+
 function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setShowImport: (v: boolean) => void }) {
   const [documents, setDocuments] = useState<LogbookDocument[]>([])
   const [entries, setEntries] = useState<LogbookEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  const [category, setCategory] = useState<LogbookCategory | 'all'>('all')
-  const [reviewFilter, setReviewFilter] = useState<'all' | 'needs_review'>('all')
-  const [search, setSearch] = useState('')
-  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc')
+  // Kept in the URL so coming back from an invoice or report returns to the same view.
+  const [category, setCategory] = useUrlState<LogbookCategory | 'all'>('lb', 'all', LOGBOOK_FILTER_VALUES)
+  const [reviewFilter, setReviewFilter] = useUrlState<'all' | 'needs_review'>('review', 'all', ['all', 'needs_review'])
+  const [search, setSearch] = useUrlState<string>('q', '')
+  const [sortOrder, setSortOrder] = useUrlState<'desc' | 'asc'>('order', 'desc', ['desc', 'asc'])
   const [openIndex, setOpenIndex] = useState<number | null>(null)
+  // ?entry=<id> (e.g. from a Tracking item) opens that entry once the list has loaded.
+  const [entryParam, setEntryParam] = useUrlState<string>('entry', '')
 
   function loadDocuments() {
     logbookApi.documents().then(setDocuments).catch(() => {})
@@ -1576,6 +1332,7 @@ function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setSho
 
   function handleEntrySaved(updated: LogbookEntry) {
     setEntries(prev => prev.map(e => e.id === updated.id ? { ...e, ...updated, source_filename: e.source_filename } : e))
+    loadDocuments() // the per-category "to review" counts come from the documents list
   }
 
   // Aggregate per-document counts up to the category level — a category can span several
@@ -1591,6 +1348,22 @@ function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setSho
   const needsReviewCountForSelection = category === 'all'
     ? [...categoryTotals.values()].reduce((s, c) => s + c.needs_review_count, 0)
     : categoryTotals.get(category)?.needs_review_count ?? 0
+
+  useEffect(() => {
+    if (!entryParam || loading) return
+    const i = entries.findIndex(e => e.id === entryParam)
+    if (i >= 0) setOpenIndex(i)
+    else if (category !== 'all' || search || reviewFilter !== 'all') { setCategory('all'); setSearch(''); setReviewFilter('all') }
+  }, [entryParam, loading, entries])
+
+  // Once nothing is left to review, drop the filter rather than showing an empty list.
+  useEffect(() => {
+    if (reviewFilter === 'needs_review' && documents.length > 0 && needsReviewCountForSelection === 0) setReviewFilter('all')
+  }, [reviewFilter, documents, needsReviewCountForSelection])
+
+  // AD/SB Compliance shows the AD list rather than the report lines (searching or reviewing still
+  // shows the lines themselves).
+  const showAdList = category === 'ad_sb_compliance' && reviewFilter === 'all' && !search.trim()
 
   function selectCategory(c: LogbookCategory | 'all') {
     setCategory(c)
@@ -1648,17 +1421,21 @@ function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setSho
               Needs review ({needsReviewCountForSelection})
             </button>
           )}
-          <button
-            onClick={() => setSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
-            className="ml-auto rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {sortOrder === 'desc' ? '↓ Newest' : '↑ Oldest'}
-          </button>
+          {!showAdList && (
+            <button
+              onClick={() => setSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
+              className="ml-auto rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              {sortOrder === 'desc' ? '↓ Newest' : '↑ Oldest'}
+            </button>
+          )}
         </div>
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
-      {loading ? (
+      {showAdList ? (
+        <AdComplianceList />
+      ) : loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">No entries match.</p>
@@ -1672,7 +1449,7 @@ function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setSho
         <LogbookEntryModal
           entries={entries}
           index={openIndex}
-          onClose={() => setOpenIndex(null)}
+          onClose={() => { setOpenIndex(null); if (entryParam) setEntryParam('') }}
           onNavigate={setOpenIndex}
           onSaved={handleEntrySaved}
         />
@@ -1685,46 +1462,30 @@ function LogbookTab({ showImport, setShowImport }: { showImport: boolean; setSho
 
 export function MaintenancePage() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
-  const [tab, setTab]                         = useState<Tab>('squawks')
-  const [showRecurring, setShowRecurring]      = useState(false)
-  const [showAddEntry, setShowAddEntry]        = useState(false)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [tab]                                 = useUrlState<Tab>('tab', 'squawks', TABS)
   const [showAddSquawk, setShowAddSquawk]      = useState(false)
   const [showImportLogbook, setShowImportLogbook] = useState(false)
-  const [logPendingFiles, setLogPendingFiles]  = useState<File[]>([])
   const [sqPendingFiles, setSqPendingFiles]    = useState<File[]>([])
 
   useEffect(() => {
-    if (searchParams.get('add') === 'squawk') {
-      setTab('squawks')
-      setShowAddSquawk(true)
-    }
-    if (searchParams.get('tab') === 'engine') setTab('engine')
-    if (searchParams.get('add') === 'entry') {
-      setTab('log')
-      setShowAddEntry(true)
-    }
+    // "add" is a one-shot request (e.g. from the dashboard): open the form, then drop it from the URL
+    // so coming Back to this page doesn't reopen it.
+    const add = searchParams.get('add')
+    if (!add) return
+    if (add === 'squawk') setShowAddSquawk(true)
+    const n = new URLSearchParams(searchParams)
+    n.delete('add')
+    if (add === 'squawk') n.delete('tab')
+    setSearchParams(n, { replace: true })
   }, [])
 
   function handleTabChange(t: Tab) {
-    setTab(t)
-    setShowRecurring(false)
-    setShowAddEntry(false)
+    // Each tab's own filters don't carry over to another tab.
+    if (t !== tab) setSearchParams(t === 'squawks' ? {} : { tab: t }, { replace: true })
     setShowAddSquawk(false)
     setShowImportLogbook(false)
-    setLogPendingFiles([])
     setSqPendingFiles([])
-  }
-
-  function handleLogDrop(e: React.DragEvent) {
-    e.preventDefault()
-    const files = Array.from(e.dataTransfer.files).filter(
-      f => f.type.startsWith('image/') || f.type === 'application/pdf'
-    )
-    if (files.length) {
-      setShowAddEntry(true)
-      setLogPendingFiles(prev => [...prev, ...files])
-    }
   }
 
   function handleSqDrop(e: React.DragEvent) {
@@ -1772,47 +1533,19 @@ export function MaintenancePage() {
               </Button>
             </div>
           )}
-          {tab === 'log' && (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => { window.location.href = '/api/export/maintenance.csv' }}
-                className="rounded-md p-1.5 text-muted-foreground hover:text-foreground"
-                title="Download CSV"
-              >
-                <Download className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => setShowRecurring(v => !v)}
-                className={cn('rounded-md p-1.5 transition-colors',
-                  showRecurring ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
-                )}
-                title="Recurring costs"
-              >
-                <RefreshCw className="h-4 w-4" />
-              </button>
-              <Button
-                size="sm"
-                onDragOver={e => e.preventDefault()}
-                onDrop={handleLogDrop}
-                onClick={() => setShowAddEntry(v => !v)}
-              >
-                <Plus className="h-4 w-4" /> Add
-              </Button>
-            </div>
-          )}
           {tab === 'logbook' && (
             <Button size="sm" onClick={() => setShowImportLogbook(v => !v)}>
               <Plus className="h-4 w-4" /> Add
             </Button>
           )}
         </div>
-        <div className="flex border-b px-4">
-          {(['squawks', 'log', 'logbook', 'engine'] as Tab[]).map(t => (
+        <div className="flex overflow-x-auto border-b px-4">
+          {TABS.map(t => (
             <button key={t} onClick={() => handleTabChange(t)}
-              className={cn('pb-2 pr-4 text-sm font-medium transition-colors border-b-2 -mb-px',
+              className={cn('shrink-0 whitespace-nowrap pb-2 pr-4 text-sm font-medium transition-colors border-b-2 -mb-px',
                 tab === t ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
               )}>
-              {t === 'squawks' ? 'Squawks' : t === 'log' ? 'Cost Log' : t === 'logbook' ? 'Logbooks' : 'Data Logs'}
+              {TAB_LABELS[t]}
             </button>
           ))}
         </div>
@@ -1827,16 +1560,10 @@ export function MaintenancePage() {
         />
       )}
       {tab === 'logbook' && <LogbookTab showImport={showImportLogbook} setShowImport={setShowImportLogbook} />}
+      {tab === 'oil' && <OilAnalysis />}
       {tab === 'engine' && <EngineTrends />}
-      {tab === 'log' && (
-        <MaintenanceTab
-          showAddEntry={showAddEntry}
-          setShowAddEntry={setShowAddEntry}
-          showRecurring={showRecurring}
-          pendingAddFiles={logPendingFiles}
-          setPendingAddFiles={setLogPendingFiles}
-        />
-      )}
+      {tab === 'tracking' && <TrackingTab />}
+      {tab === 'databases' && <AvionicsDatabases />}
     </div>
   )
 }

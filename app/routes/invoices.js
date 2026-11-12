@@ -44,7 +44,7 @@ router.get('/', handle('GET /invoices', async (req, res) => {
   const { rows: invoices } = await pool.query(`
     SELECT ${INVOICE_COLS},
       (SELECT COUNT(*)::int FROM ledger_invoices li WHERE li.invoice_id = i.id) AS ledger_count,
-      (SELECT COUNT(*)::int FROM logbook_entries e WHERE e.invoice_id = i.id) AS logbook_count
+      (SELECT COUNT(*)::int FROM logbook_entry_invoices lei WHERE lei.invoice_id = i.id) AS logbook_count
     FROM invoices i
     WHERE i.partnership_id = $1
     ORDER BY i.invoice_date DESC NULLS LAST, i.invoice_number DESC`, [partnershipId]);
@@ -86,8 +86,9 @@ router.get('/:id', handle('GET /invoices/:id', async (req, res) => {
                        TO_CHAR(l.effective_date, 'YYYY-MM-DD') AS effective_date, l.description
                 FROM ledger_invoices li JOIN financial_ledger l ON l.id = li.ledger_id LEFT JOIN users u ON u.id = l.lessee_id
                 WHERE li.invoice_id = $1 ORDER BY l.effective_date`, [invoice.id]),
-    pool.query(`SELECT id, TO_CHAR(entry_date, 'YYYY-MM-DD') AS entry_date, category, summary
-                FROM logbook_entries WHERE invoice_id = $1 ORDER BY entry_date`, [invoice.id]),
+    pool.query(`SELECT e.id, TO_CHAR(e.entry_date, 'YYYY-MM-DD') AS entry_date, e.category, e.summary
+                FROM logbook_entry_invoices lei JOIN logbook_entries e ON e.id = lei.entry_id
+                WHERE lei.invoice_id = $1 ORDER BY e.entry_date, e.category`, [invoice.id]),
   ]);
   res.json({ ...invoice, items, ledger_entries: ledger, logbook_entries: logbook });
 }));
@@ -260,16 +261,19 @@ router.post('/:id/logbook', handle('POST /invoices/:id/logbook', async (req, res
   const partnershipId = await getPartnershipId(req.session.userId);
   const { rows: [inv] } = await pool.query('SELECT id FROM invoices WHERE id = $1 AND partnership_id = $2', [req.params.id, partnershipId]);
   if (!inv) return res.status(404).json({ error: 'Invoice not found' });
-  const { rowCount } = await pool.query(
-    'UPDATE logbook_entries SET invoice_id = $1 WHERE id = $2 AND partnership_id = $3', [inv.id, req.body.entry_id, partnershipId]);
-  if (!rowCount) return res.status(404).json({ error: 'Logbook entry not found' });
+  const { rows: [entry] } = await pool.query(
+    'SELECT id FROM logbook_entries WHERE id = $1 AND partnership_id = $2', [req.body.entry_id, partnershipId]);
+  if (!entry) return res.status(404).json({ error: 'Logbook entry not found' });
+  await pool.query('INSERT INTO logbook_entry_invoices (entry_id, invoice_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [entry.id, inv.id]);
   res.json({ ok: true });
 }));
 
 // DELETE /api/invoices/:id/logbook/:entryId — unlink
 router.delete('/:id/logbook/:entryId', handle('DELETE /invoices/:id/logbook', async (req, res) => {
   const partnershipId = await getPartnershipId(req.session.userId);
-  await pool.query('UPDATE logbook_entries SET invoice_id = NULL WHERE id = $1 AND invoice_id = $2 AND partnership_id = $3',
+  await pool.query(
+    `DELETE FROM logbook_entry_invoices lei USING invoices i
+     WHERE lei.entry_id = $1 AND lei.invoice_id = $2 AND i.id = lei.invoice_id AND i.partnership_id = $3`,
     [req.params.entryId, req.params.id, partnershipId]);
   res.sendStatus(204);
 }));

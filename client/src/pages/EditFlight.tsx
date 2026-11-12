@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { PilotPicker } from '@/components/PilotPicker'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, Trash2, Camera } from 'lucide-react'
 import { api, type Flight, type TachOcrResult, type PartnershipMember } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -15,7 +16,7 @@ const FULL_GALLONS = '92'
 
 export function EditFlight() {
   const { id } = useParams<{ id: string }>()
-  const navigate = useNavigate()
+  const goBack = useGoBack('/flights')
 
   const [members, setMembers] = useState<PartnershipMember[]>([])
   const [pilotId, setPilotId] = useState('')
@@ -150,7 +151,7 @@ export function EditFlight() {
         exclude_from_allotment: excludeFromAllotment,
         ...(ocrImageKey ? { ocr_source_image_key: ocrImageKey } : {}),
       })
-      navigate('/flights')
+      goBack()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -163,7 +164,7 @@ export function EditFlight() {
     setDeleting(true)
     try {
       await api.delete(`/flights/${id}`)
-      navigate('/flights')
+      goBack()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete')
       setDeleting(false)
@@ -184,7 +185,7 @@ export function EditFlight() {
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-3">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate('/flights')}
+            onClick={() => goBack()}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
           >
             <ChevronLeft className="h-5 w-5" />

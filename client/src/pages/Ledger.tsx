@@ -7,6 +7,12 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { TYPE_CONFIG } from '@/lib/ledgerTypes'
+import { useUrlState } from '@/lib/navigation'
+import { CostAnalysis } from '@/components/CostAnalysis'
+
+type View = 'entries' | 'analysis'
+const VIEWS: readonly View[] = ['entries', 'analysis']
+const VIEW_LABELS: Record<View, string> = { entries: 'Entries', analysis: 'Cost Analysis' }
 
 function fmtAmount(amount: string) {
   return parseFloat(amount).toLocaleString('en-US', { minimumFractionDigits: 2 })
@@ -21,6 +27,7 @@ export function Ledger() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+  const [view, setView] = useUrlState<View>('view', 'entries', VIEWS)
   const [lessees, setLessees]           = useState<PartnershipMember[]>([])
   const [selectedLesseeId, setLesseeId] = useState<string>('')
   const [entries, setEntries]           = useState<LedgerEntry[]>([])
@@ -86,7 +93,8 @@ export function Ledger() {
   return (
     <div className="flex flex-col">
       {/* Header */}
-      <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-3">
+      <div className="sticky top-0 z-10 border-b bg-background">
+      <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold">Ledger</h1>
             <button
@@ -99,6 +107,7 @@ export function Ledger() {
             </button>
         </div>
         <div className="flex items-center gap-2">
+          {view === 'entries' && <>
           <button
             onClick={() => { window.location.href = '/api/export/ledger.csv' }}
             className="rounded-md p-1.5 text-muted-foreground hover:text-foreground"
@@ -113,13 +122,26 @@ export function Ledger() {
           >
             <RefreshCw className="h-4 w-4" />
           </button>
+          </>}
           <Button size="sm" onClick={() => navigate(newEntryUrl)}>
             <Plus className="h-4 w-4" /> Add
           </Button>
         </div>
       </div>
+        <div className="flex overflow-x-auto px-4">
+          {VIEWS.map(v => (
+            <button key={v} onClick={() => setView(v)}
+              className={cn('shrink-0 whitespace-nowrap pb-2 pr-4 text-sm font-medium transition-colors border-b-2 -mb-px',
+                view === v ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground')}>
+              {VIEW_LABELS[v]}
+            </button>
+          ))}
+        </div>
+      </div>
 
-      <div className="space-y-4 p-4">
+      {view === 'analysis' && <CostAnalysis />}
+
+      {view === 'entries' && <div className="space-y-4 p-4">
         {/* Lessee switcher */}
         {lessees.length > 1 && (
           <div className="flex gap-2">
@@ -285,7 +307,7 @@ export function Ledger() {
             </div>
           ))}
         </div>
-      </div>
+      </div>}
     </div>
   )
 }

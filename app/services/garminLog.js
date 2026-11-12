@@ -1,3 +1,4 @@
+const path = require('path');
 // Parses a Garmin avionics data log ("Original CSV" from flyGarmin / Garmin Pilot): one row per
 // second with position, air data and engine data. The file is three header lines —
 //   #airframe_info, key="value", ...
@@ -210,9 +211,12 @@ function parseGarminLog(text, filename = '') {
 
   // Airports: departure from the filename (log_YYMMDD_HHMMSS_KPAO.csv), arrival = last
   // 4-letter active waypoint (airports are 4 letters; fixes are 5, VORs 3, runways have digits).
-  const fnAirport = /_([A-Z0-9]{3,4})(?:\.csv)+$/i.exec(filename)?.[1]?.toUpperCase() || null;
-  let dest = null;
-  if ('AtvWpt' in ix) {
+  // Garmin Pilot exports are named for the route instead: YYYY-MM-DD-FROM-TO.csv (a long log may
+  // come split as …_1.csv, …_2.csv); both airports come from that name.
+  const gp = /^\d{4}-\d{2}-\d{2}-([A-Z0-9]{3,4})-([A-Z0-9]{3,4})(?:_\d+)?(?:\.csv)+$/i.exec(path.basename(filename));
+  const fnAirport = gp ? gp[1].toUpperCase() : /_([A-Z0-9]{3,4})(?:\.csv)+$/i.exec(filename)?.[1]?.toUpperCase() || null;
+  let dest = gp ? gp[2].toUpperCase() : null;
+  if (!dest && 'AtvWpt' in ix) {
     for (let i = rows.length - 1; i >= 0 && !dest; i--) {
       const w = rows[i].f[ix.AtvWpt];
       if (/^[A-Z]{4}$/.test(w)) dest = w;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, X } from 'lucide-react'
 import { documentsApi, type AircraftDocument, type AircraftDocType, type DocumentCitation } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -229,7 +229,7 @@ function AircraftDocTypeRow({
 }
 
 export function Documents() {
-  const navigate = useNavigate()
+  const goBack = useGoBack('/')
   const [documents, setDocuments] = useState<AircraftDocument[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -240,7 +240,7 @@ export function Documents() {
   return (
     <div className="flex flex-col">
       <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-3">
-        <button onClick={() => navigate(-1)} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
+        <button onClick={goBack} className="rounded-md p-1 text-muted-foreground hover:text-foreground">
           <ChevronLeft className="h-5 w-5" />
         </button>
         <div>

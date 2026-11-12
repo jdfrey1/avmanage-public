@@ -1,6 +1,7 @@
 const express = require('express');
 const pool = require('../db');
 const requireAuth = require('../middleware/requireAuth');
+const reports = require('../services/reports');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -70,6 +71,22 @@ async function resolveLesseeId(userId, role, partnershipId, queryParam) {
 // ── static routes first (must come before /:id) ──────────────────────────────
 
 // GET /api/ledger/lessees — list all members in partnership (for switcher)
+// GET /api/ledger/cost-analysis?start=YYYY-MM-DD&end=YYYY-MM-DD (default: year to date)
+router.get('/cost-analysis', async (req, res) => {
+  try {
+    const { rows: [m] } = await pool.query('SELECT partnership_id FROM partnership_members WHERE user_id = $1 LIMIT 1', [req.session.userId]);
+    if (!m) return res.status(404).json({ error: 'No partnership found' });
+    const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+    const today = new Date().toLocaleDateString('en-CA');
+    const start = isDate(req.query.start) ? req.query.start : `${today.slice(0, 4)}-01-01`;
+    const end = isDate(req.query.end) ? req.query.end : today;
+    res.json(await reports.getCostAnalysis(m.partnership_id, start, end));
+  } catch (err) {
+    console.error('GET /ledger/cost-analysis error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 router.get('/lessees', async (req, res) => {
   try {
     const { partnershipId } = await getMembership(req.session.userId);

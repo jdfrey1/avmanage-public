@@ -175,69 +175,6 @@ router.get('/summary', async (req, res) => {
   }
 });
 
-router.get('/cost-analysis', async (req, res) => {
-  try {
-    const partnershipId = await getPartnershipId(req.session.userId);
-
-    let startDate, endDate;
-    const today = new Date().toISOString().slice(0, 10);
-    const currentYear = new Date().getFullYear();
-
-    if (req.query.start && req.query.end) {
-      startDate = req.query.start;
-      endDate   = req.query.end;
-    } else if (req.query.year) {
-      const year = parseInt(req.query.year);
-      startDate = `${year}-01-01`;
-      endDate   = `${year}-12-31`;
-    } else {
-      // Default: YTD
-      startDate = `${currentYear}-01-01`;
-      endDate   = today;
-    }
-
-    const [{ rows: costRows }, { rows: flightRows }] = await Promise.all([
-      pool.query(`
-        SELECT category, COALESCE(SUM(cost_amount), 0)::float AS total
-        FROM maintenance_log
-        WHERE partnership_id = $1
-          AND cost_amount IS NOT NULL
-          AND entry_date >= $2 AND entry_date <= $3
-        GROUP BY category
-      `, [partnershipId, startDate, endDate]),
-      pool.query(`
-        SELECT f.pilot_id, u.name AS pilot_name, COALESCE(SUM(f.flight_time), 0)::float AS hours
-        FROM flights f
-        JOIN users u ON u.id = f.pilot_id
-        WHERE f.partnership_id = $1
-          AND f.flight_date >= $2 AND f.flight_date <= $3
-        GROUP BY f.pilot_id, u.name
-        ORDER BY hours DESC
-      `, [partnershipId, startDate, endDate]),
-    ]);
-
-    const byCategory  = costRows;
-    const totalCost   = costRows.reduce((s, r) => s + r.total, 0);
-    const variableCost = costRows.find(r => r.category === 'fuel')?.total ?? 0;
-    const fixedCost   = totalCost - variableCost;
-    const totalHours  = flightRows.reduce((s, r) => s + r.hours, 0);
-    const costPerHour = totalHours > 0 ? totalCost / totalHours : 0;
-
-    const pilots = flightRows.map(r => ({
-      pilot_id:   r.pilot_id,
-      pilot_name: r.pilot_name,
-      hours:      r.hours,
-      pct:        totalHours > 0 ? (r.hours / totalHours) * 100 : 0,
-    }));
-
-    res.json({ start_date: startDate, end_date: endDate, total_hours: totalHours, pilots, total_cost: totalCost, fixed_cost: fixedCost, variable_cost: variableCost, cost_per_hour: costPerHour, by_category: byCategory });
-  } catch (err) {
-    if (err.status) return res.status(err.status).json({ error: err.message });
-    console.error('GET /maintenance/cost-analysis error:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
 // ── Hour-based maintenance intervals (e.g. oil change every 50 Flight hrs) ──
 router.get('/intervals', async (req, res) => {
   try {
@@ -284,6 +221,8 @@ router.patch('/intervals/:id', async (req, res) => {
       `UPDATE maintenance_intervals SET ${sets} WHERE id = $1 AND partnership_id = $2`,
       [req.params.id, partnershipId, ...updates.map(([, v]) => (v === '' ? null : v))]);
     if (!rowCount) return res.status(404).json({ error: 'Interval not found' });
+    // A new last-done reading means the linked logbook entry no longer records the latest one.
+    if (updates.some(([k]) => k.startsWith('last_done'))) await clearTrackerLinks('interval_id', req.params.id);
     res.json({ ok: true });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -291,6 +230,12 @@ router.patch('/intervals/:id', async (req, res) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 });
+
+// A tracked item's logbook links record its *last* completion; once a newer one is recorded
+// they're stale. column is a fixed identifier ('interval_id' | 'inspection_item_id').
+async function clearTrackerLinks(column, itemId) {
+  await pool.query(`DELETE FROM tracker_logbook_links WHERE ${column} = $1`, [itemId]);
+}
 
 // Mark done: resets the interval from the given Flight-timer reading (default: current).
 router.post('/intervals/:id/done', async (req, res) => {
@@ -304,6 +249,7 @@ router.post('/intervals/:id/done', async (req, res) => {
        WHERE id = $1 AND partnership_id = $2 AND active = true`,
       [req.params.id, partnershipId, hours, req.body?.date || new Date().toISOString().slice(0, 10)]);
     if (!rowCount) return res.status(404).json({ error: 'Interval not found' });
+    await clearTrackerLinks('interval_id', req.params.id);
     res.json({ ok: true });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -335,6 +281,269 @@ router.get('/aircraft-status', async (req, res) => {
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('GET /maintenance/aircraft-status error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── Avionics databases (cycle installed + expiration) ──
+router.get('/databases', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rows } = await pool.query(`
+      SELECT id, name, cycle, to_char(expires_date, 'YYYY-MM-DD') AS expires_date, warn_days, notes,
+             sort_order, updated_at,
+             (expires_date - CURRENT_DATE) AS days_until,
+             CASE WHEN expires_date IS NULL THEN 'no_expiry'
+                  WHEN expires_date < CURRENT_DATE THEN 'expired'
+                  WHEN expires_date - CURRENT_DATE <= warn_days THEN 'due_soon'
+                  ELSE 'ok' END AS status
+        FROM avionics_databases WHERE partnership_id = $1
+       ORDER BY sort_order, name`, [partnershipId]);
+    res.json(rows);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('GET /maintenance/databases error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.post('/databases', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { name, cycle, expires_date, notes, warn_days } = req.body;
+    if (!name?.trim()) return res.status(400).json({ error: 'name is required' });
+    const { rows: [row] } = await pool.query(`
+      INSERT INTO avionics_databases (partnership_id, name, cycle, expires_date, notes, warn_days, sort_order)
+      VALUES ($1,$2,$3,$4,$5,$6,
+              (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM avionics_databases WHERE partnership_id = $1))
+      RETURNING id`,
+      [partnershipId, name.trim(), cycle?.trim() || null, expires_date || null, notes || null, warn_days ?? 7]);
+    res.status(201).json(row);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('POST /maintenance/databases error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Editing a database's cycle by hand also records it in the update history (dated updated_on, or today).
+router.patch('/databases/:id', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const allowed = ['name', 'cycle', 'expires_date', 'notes', 'warn_days', 'sort_order'];
+    const updates = Object.entries(req.body).filter(([k]) => allowed.includes(k));
+    if (!updates.length) return res.status(400).json({ error: 'No valid fields to update' });
+    const { rows: [before] } = await pool.query(
+      'SELECT cycle FROM avionics_databases WHERE id = $1 AND partnership_id = $2', [req.params.id, partnershipId]);
+    if (!before) return res.status(404).json({ error: 'Database not found' });
+    const sets = updates.map(([k], i) => `${k} = $${i + 3}`).join(', ');
+    const { rows: [after] } = await pool.query(
+      `UPDATE avionics_databases SET ${sets}, updated_at = NOW() WHERE id = $1 AND partnership_id = $2
+       RETURNING id, name, cycle, expires_date`,
+      [req.params.id, partnershipId, ...updates.map(([, v]) => (typeof v === 'string' ? (v.trim() || null) : v))]);
+    if (after.cycle && after.cycle !== before.cycle) {
+      await logDatabaseUpdate(pool, partnershipId, req.session.userId, after, before.cycle, req.body.updated_on, null);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('PATCH /maintenance/databases/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/databases/:id', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rowCount } = await pool.query(
+      'DELETE FROM avionics_databases WHERE id = $1 AND partnership_id = $2', [req.params.id, partnershipId]);
+    if (!rowCount) return res.status(404).json({ error: 'Database not found' });
+    res.sendStatus(204);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('DELETE /maintenance/databases/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+async function logDatabaseUpdate(db, partnershipId, userId, row, previousCycle, updatedOn, photoId) {
+  await db.query(`
+    INSERT INTO avionics_database_updates
+      (partnership_id, database_id, database_name, previous_cycle, cycle, expires_date, updated_on, photo_id, recorded_by)
+    VALUES ($1,$2,$3,$4,$5,$6,COALESCE($7::date, CURRENT_DATE),$8,$9)`,
+    [partnershipId, row.id, row.name, previousCycle || null, row.cycle, row.expires_date || null,
+     updatedOn || null, photoId || null, userId]);
+}
+
+const DB_PHOTO_DIR = path.join(UPLOADS_DIR, 'maintenance', 'databases');
+
+// POST /api/maintenance/databases/record — a database update session: the new cycle/expiration for
+// each database that changed, all dated updated_on and tied to that day's photo (optional).
+router.post('/databases/record', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { updated_on, photo_id, changes } = req.body;
+    if (!Array.isArray(changes) || !changes.length) return res.status(400).json({ error: 'No database changes given' });
+    if (updated_on && !/^\d{4}-\d{2}-\d{2}$/.test(updated_on)) return res.status(400).json({ error: 'updated_on must be YYYY-MM-DD' });
+    await client.query('BEGIN');
+    let recorded = 0;
+    for (const c of changes) {
+      const { rows: [before] } = await client.query(
+        'SELECT cycle FROM avionics_databases WHERE id = $1 AND partnership_id = $2 FOR UPDATE', [c.id, partnershipId]);
+      if (!before) continue;
+      const { rows: [after] } = await client.query(
+        `UPDATE avionics_databases SET cycle = $3, expires_date = $4, updated_at = NOW()
+          WHERE id = $1 AND partnership_id = $2 RETURNING id, name, cycle, expires_date`,
+        [c.id, partnershipId, c.cycle?.trim() || null, c.expires_date || null]);
+      await logDatabaseUpdate(client, partnershipId, req.session.userId, after, before.cycle, updated_on, photo_id);
+      recorded++;
+    }
+    await client.query('COMMIT');
+    res.json({ recorded });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('POST /maintenance/databases/record error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/maintenance/databases/history — photos (newest first) and the update log (newest first).
+router.get('/databases/history', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rows: photos } = await pool.query(`
+      SELECT id, filename, to_char(taken_date, 'YYYY-MM-DD') AS taken_date, uploaded_at
+        FROM avionics_database_photos WHERE partnership_id = $1
+       ORDER BY taken_date DESC, uploaded_at DESC`, [partnershipId]);
+    const { rows: updates } = await pool.query(`
+      SELECT u.id, u.database_id, u.database_name, u.previous_cycle, u.cycle,
+             to_char(u.expires_date, 'YYYY-MM-DD') AS expires_date,
+             to_char(u.updated_on, 'YYYY-MM-DD') AS updated_on, u.photo_id,
+             us.name AS recorded_by_name
+        FROM avionics_database_updates u
+        LEFT JOIN users us ON us.id = u.recorded_by
+       WHERE u.partnership_id = $1
+       ORDER BY u.updated_on DESC, u.created_at DESC, u.database_name`, [partnershipId]);
+    res.json({ photos, updates });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('GET /maintenance/databases/history error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /api/maintenance/databases/history/date — move one day's updates and photos to another date.
+router.patch('/databases/history/date', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { date, update_ids = [], photo_ids = [] } = req.body;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '')) return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+    await pool.query('UPDATE avionics_database_updates SET updated_on = $1 WHERE partnership_id = $2 AND id = ANY($3::uuid[])',
+      [date, partnershipId, update_ids]);
+    const { rows: photos } = await pool.query(
+      `UPDATE avionics_database_photos SET taken_date = $1 WHERE partnership_id = $2 AND id = ANY($3::uuid[])
+       RETURNING drive_file_id, file_key`,
+      [date, partnershipId, photo_ids]);
+    // Drive copies are named by date; keep the name in step.
+    for (const p of photos.filter(p => p.drive_file_id)) {
+      googleDrive.renameFile(p.drive_file_id, `Databases ${date}${path.extname(p.file_key) || '.jpg'}`)
+        .catch(err => console.error('Drive rename failed for database photo:', err.message));
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('PATCH /maintenance/databases/history/date error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// DELETE /api/maintenance/databases/updates/:id — drop a history line (e.g. a cycle typo that was corrected).
+router.delete('/databases/updates/:id', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rowCount } = await pool.query(
+      'DELETE FROM avionics_database_updates WHERE id = $1 AND partnership_id = $2', [req.params.id, partnershipId]);
+    if (!rowCount) return res.status(404).json({ error: 'Update not found' });
+    res.sendStatus(204);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('DELETE /maintenance/databases/updates/:id error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /api/maintenance/databases/photos — a photo of the Garmin database page (Drive: Maintenance/Databases).
+router.post('/databases/photos', upload.single('file'), async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    if (!req.file) return res.status(400).json({ error: 'file is required' });
+    if (!req.file.mimetype.startsWith('image/')) return res.status(400).json({ error: 'Upload a photo' });
+    const takenDate = req.body.taken_date || null;
+    if (takenDate && !/^\d{4}-\d{2}-\d{2}$/.test(takenDate)) return res.status(400).json({ error: 'taken_date must be YYYY-MM-DD' });
+
+    const ext = (path.extname(req.file.originalname || '') || '.jpg').toLowerCase();
+    const storedName = `${crypto.randomUUID()}${ext}`;
+    fs.mkdirSync(DB_PHOTO_DIR, { recursive: true });
+    fs.writeFileSync(path.join(DB_PHOTO_DIR, storedName), req.file.buffer);
+    const { rows: [photo] } = await pool.query(`
+      INSERT INTO avionics_database_photos (partnership_id, filename, file_key, mime_type, taken_date, uploaded_by)
+      VALUES ($1, $2, $3, $4, COALESCE($5::date, CURRENT_DATE), $6)
+      RETURNING id, to_char(taken_date, 'YYYY-MM-DD') AS taken_date`,
+      [partnershipId, req.file.originalname || storedName, path.join('maintenance', 'databases', storedName),
+       req.file.mimetype, takenDate, req.session.userId]);
+
+    // Named by date on Drive so the folder reads as a history.
+    const driveName = `Databases ${photo.taken_date}${ext}`;
+    googleAuth.isConnected().then(async (connected) => {
+      if (!connected) return;
+      await googleDrive.ensureFolderStructure();
+      const driveFileId = await googleDrive.uploadFile('databases', { name: driveName, mimeType: req.file.mimetype, buffer: req.file.buffer });
+      await pool.query('UPDATE avionics_database_photos SET drive_file_id = $1 WHERE id = $2', [driveFileId, photo.id]);
+    }).catch(err => console.error(`Drive sync failed for database photo ${photo.id}:`, err.message));
+
+    res.status(201).json(photo);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('POST /maintenance/databases/photos error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.get('/databases/photos/:id/file', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rows: [p] } = await pool.query(
+      'SELECT filename, file_key, mime_type FROM avionics_database_photos WHERE id = $1 AND partnership_id = $2',
+      [req.params.id, partnershipId]);
+    if (!p) return res.status(404).json({ error: 'Photo not found' });
+    const full = path.join(UPLOADS_DIR, p.file_key);
+    if (!fs.existsSync(full)) return res.status(404).json({ error: 'File missing on disk' });
+    res.setHeader('Content-Type', p.mime_type);
+    res.setHeader('Content-Disposition', `inline; filename="${p.filename.replace(/"/g, '')}"`);
+    fs.createReadStream(full).pipe(res);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('GET /maintenance/databases/photos/:id/file error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+router.delete('/databases/photos/:id', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    const { rows: [p] } = await pool.query(
+      'DELETE FROM avionics_database_photos WHERE id = $1 AND partnership_id = $2 RETURNING file_key',
+      [req.params.id, partnershipId]);
+    if (!p) return res.status(404).json({ error: 'Photo not found' });
+    fs.unlink(path.join(UPLOADS_DIR, p.file_key), () => {});
+    res.sendStatus(204);
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('DELETE /maintenance/databases/photos/:id error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -379,6 +588,7 @@ router.patch('/inspections/:id', async (req, res) => {
       `UPDATE inspection_items SET ${sets} WHERE id = $1 AND partnership_id = $2`,
       [req.params.id, partnershipId, ...updates.map(([, v]) => (v === '' ? null : v))]);
     if (!rowCount) return res.status(404).json({ error: 'Inspection not found' });
+    if (updates.some(([k]) => k === 'last_done_date')) await clearTrackerLinks('inspection_item_id', req.params.id);
     res.json({ ok: true });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
@@ -401,6 +611,7 @@ router.post('/inspections/:id/done', async (req, res) => {
        WHERE id = $1 AND partnership_id = $2 AND active`,
       [req.params.id, partnershipId, date]);
     if (!rowCount) return res.status(404).json({ error: 'Inspection not found' });
+    await clearTrackerLinks('inspection_item_id', req.params.id);
     res.json({ ok: true });
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });

@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/context/AuthContext'
 import { setPendingPhoto } from '@/lib/pendingPhoto'
+import { DateTile } from '@/components/DateTile'
 import { AircraftStatusBanner, useAircraftStatus } from '@/components/AircraftStatusBanner'
 import { api, type DashboardFinding, type Flight, type ScheduleBlock, type PartnershipMember, type LedgerEntry, type AnnualHoursSummary, type Squawk, type Partnership, type CurrencyStatus } from '@/lib/api'
 
@@ -31,10 +32,10 @@ function squawkVariant(severity: string) {
   return 'secondary'
 }
 
-function expiryDate(daysFromNow: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() + daysFromNow)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+// Currency dates come from the server as YYYY-MM-DD; days left count the expiration day (as ForeFlight does).
+function expiryDate(ymd: string | null, withYear = false): string {
+  if (!ymd) return ''
+  return new Date(ymd + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) })
 }
 
 function timeGreeting() {
@@ -137,7 +138,6 @@ export function Dashboard() {
 
   return (
     <div className="space-y-4 p-4">
-      <AircraftStatusBanner status={aircraftStatus} />
       {/* Header */}
       <div className="pt-2 flex items-start justify-between">
         <div>
@@ -165,7 +165,7 @@ export function Dashboard() {
         {[
           { label: 'Flight',   path: '/flights/new' },
           { label: 'Reserve',  path: '/schedule/new' },
-          { label: 'Maintenance', path: '/maintenance?add=entry' },
+          { label: 'Maintenance', path: '/maintenance' },
           { label: 'Squawk',   path: '/maintenance?add=squawk' },
           { label: 'Ledger',   path: '/ledger/new' },
         ].map(({ label, path }) => (
@@ -191,7 +191,7 @@ export function Dashboard() {
       </div>
 
       {/* Summary row: Aircraft Hours | Annual/Monthly Hours | Balance */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
         <Card>
           <CardHeader className="pb-1 pt-3 px-3">
             <CardTitle className="flex items-center gap-1 text-xs">
@@ -200,16 +200,16 @@ export function Dashboard() {
           </CardHeader>
           <CardContent className="px-3 pb-3 pt-0">
             {lastFlight ? (
-              <div className="flex gap-3">
+              <div className="flex flex-wrap gap-x-3 gap-y-1">
                 <div>
-                  <p className="text-lg font-bold tabular-nums leading-tight">
+                  <p className="text-base font-bold tabular-nums leading-tight sm:text-lg">
                     {parseFloat(lastFlight.tach_end).toFixed(1)}
                   </p>
                   <p className="text-[10px] text-muted-foreground">Hobbs</p>
                 </div>
                 {lastFlight.hobbs_end && (
                   <div>
-                    <p className="text-lg font-bold tabular-nums leading-tight">
+                    <p className="text-base font-bold tabular-nums leading-tight sm:text-lg">
                       {parseFloat(lastFlight.hobbs_end).toFixed(1)}
                     </p>
                     <p className="text-[10px] text-muted-foreground">Flight</p>
@@ -224,8 +224,8 @@ export function Dashboard() {
 
         <Card>
           <CardHeader className="pb-1 pt-3 px-3">
-            <div className="flex items-start justify-between gap-1">
-              <CardTitle className="flex items-center gap-1 text-xs">
+            <div className="flex flex-wrap items-start justify-between gap-1">
+              <CardTitle className="flex items-center gap-1 text-xs whitespace-nowrap">
                 <Clock className="h-3 w-3" /> Used Hours
               </CardTitle>
               <MemberSwitcher members={upcomingMembers} selectedId={hoursMemberId} onSelect={setHoursUserId} />
@@ -264,7 +264,8 @@ export function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="cursor-pointer" onClick={() => navigate('/ledger')}>
+        {/* Balance is left off on phones to keep the hours cards readable; it's on the Ledger tab. */}
+        <Card className="hidden cursor-pointer sm:block" onClick={() => navigate('/ledger')}>
           <CardHeader className="pb-1 pt-3 px-3">
             <CardTitle className="flex items-center gap-1 text-xs">
               <DollarSign className="h-3 w-3" /> {user?.role === 'owner' ? 'Total expenses' : 'Balance'}
@@ -277,6 +278,8 @@ export function Dashboard() {
           </CardContent>
         </Card>
       </div>
+
+      <AircraftStatusBanner status={aircraftStatus} />
 
       {/* Upcoming reservations */}
       <Card className="cursor-pointer" onClick={() => navigate('/schedule')}>
@@ -292,14 +295,7 @@ export function Dashboard() {
             <ul className="space-y-3">
               {upcoming.map(b => (
                 <li key={b.id} className="flex items-start gap-3">
-                  <div className="flex w-10 flex-col items-center rounded-md bg-muted py-1 text-center">
-                    <span className="text-[10px] uppercase text-muted-foreground">
-                      {new Date(b.start_dt).toLocaleDateString('en-US', { month: 'short' })}
-                    </span>
-                    <span className="text-lg font-bold leading-none">
-                      {new Date(b.start_dt).getDate()}
-                    </span>
-                  </div>
+                  <DateTile date={b.start_dt} />
                   <div className="flex-1 min-w-0">
                     <p className="truncate text-sm font-medium">{b.title}</p>
                     <p className="text-xs text-muted-foreground">
@@ -407,31 +403,29 @@ export function Dashboard() {
                 label="IFR"
                 current={currency.ifr.current}
                 detail={currency.ifr.current
-                  ? `${currency.ifr.approachesInWindow} approaches · expires in ${currency.ifr.expiresInDays}d · ${expiryDate(currency.ifr.expiresInDays)}`
-                  : 'Not current'}
+                  ? `${currency.ifr.approachesInWindow} approaches${currency.ifr.holdInWindow ? ' + hold' : ''}${currency.ifr.ipcDate ? ' · IPC' : ''} · ${currency.ifr.expiresInDays}d left · ${expiryDate(currency.ifr.expiresDate)}`
+                  : `Not current · ${currency.ifr.approachesInWindow}/6 approaches${currency.ifr.holdInWindow ? ' + hold' : ', no hold'} in 6 months`}
               />
               <CurrencyRow
                 label="Day landing"
                 current={currency.dayLanding.current}
                 detail={currency.dayLanding.current
-                  ? `Expires in ${currency.dayLanding.expiresInDays}d · ${expiryDate(currency.dayLanding.expiresInDays)}`
+                  ? `${currency.dayLanding.expiresInDays}d left · ${expiryDate(currency.dayLanding.expiresDate)}`
                   : 'Not current'}
               />
               <CurrencyRow
                 label="Night landing"
                 current={currency.nightLanding.current}
                 detail={currency.nightLanding.current
-                  ? `Expires in ${currency.nightLanding.expiresInDays}d · ${expiryDate(currency.nightLanding.expiresInDays)}`
-                  : currency.nightLanding.expiresInDays < 0
-                    ? `Expired ${Math.abs(currency.nightLanding.expiresInDays)}d ago`
-                    : 'Not current'}
+                  ? `${currency.nightLanding.expiresInDays}d left · ${expiryDate(currency.nightLanding.expiresDate)}`
+                  : 'Not current'}
               />
               <CurrencyRow
                 label="Medical"
                 current={currency.medical?.current ?? false}
                 detail={currency.medical?.expiresDate
                   ? currency.medical.current
-                    ? `Expires in ${currency.medical.daysUntilExpiry}d · ${new Date(currency.medical.expiresDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                    ? `${currency.medical.daysUntilExpiry}d left · ${expiryDate(currency.medical.expiresDate, true)}`
                     : `Expired ${Math.abs(currency.medical.daysUntilExpiry ?? 0)}d ago`
                   : 'No expiry set — update in Settings'}
               />
@@ -440,7 +434,7 @@ export function Dashboard() {
                 current={currency.bfr?.current ?? false}
                 detail={currency.bfr?.expiresDate
                   ? currency.bfr.current
-                    ? `Expires in ${currency.bfr.daysUntilExpiry}d · ${new Date(currency.bfr.expiresDate + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
+                    ? `${currency.bfr.daysUntilExpiry}d left · ${expiryDate(currency.bfr.expiresDate, true)}`
                     : `Expired ${Math.abs(currency.bfr.daysUntilExpiry ?? 0)}d ago`
                   : 'No BFR date set — update in Settings'}
               />
@@ -474,16 +468,19 @@ function MemberSwitcher({ members, selectedId, onSelect }: { members: Partnershi
 
 function CurrencyRow({ label, current, detail }: { label: string; current: boolean; detail: string }) {
   return (
-    <div className="flex items-center justify-between">
-      <div className="flex items-center gap-2">
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex shrink-0 items-center gap-2">
         {current
           ? <ShieldCheck className="h-4 w-4 text-emerald-500" />
           : <ShieldAlert className="h-4 w-4 text-destructive" />
         }
         <span className="text-sm">{label}</span>
       </div>
-      <span className={`text-xs ${current ? 'text-muted-foreground' : 'text-destructive font-medium'}`}>
-        {detail}
+      {/* Each " · " part stays on one line, so a long detail wraps between parts, not mid-date. */}
+      <span className={`text-right text-xs ${current ? 'text-muted-foreground' : 'text-destructive font-medium'}`}>
+        {detail.split(' · ').map((part, i) => (
+          <span key={i}>{i > 0 && ' · '}<span className="whitespace-nowrap">{part}</span></span>
+        ))}
       </span>
     </div>
   )

@@ -9,6 +9,8 @@ const requireAuth = require('../middleware/requireAuth');
 const { extractAndStore, VALID_CATEGORIES } = require('../services/logbookImport');
 const googleDrive = require('../services/googleDrive');
 const googleAuth = require('../services/googleAuth');
+const oilAnalysis = require('../services/oilAnalysis');
+const adCompliance = require('../services/adCompliance');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -121,6 +123,18 @@ router.post('/import', upload.single('file'), async (req, res) => {
   }
 });
 
+// GET /api/logbook/ad-items — the AD/SB list with the logbook entries documenting each.
+router.get('/ad-items', async (req, res) => {
+  try {
+    const partnershipId = await getPartnershipId(req.session.userId);
+    res.json(await adCompliance.getAdItems(partnershipId));
+  } catch (err) {
+    if (err.status) return res.status(err.status).json({ error: err.message });
+    console.error('GET /logbook/ad-items error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // GET /api/logbook/entries
 router.get('/entries', async (req, res) => {
   try {
@@ -159,16 +173,21 @@ router.get('/entries', async (req, res) => {
       SELECT e.id, e.document_id, e.category, e.page_number,
              TO_CHAR(e.entry_date, 'YYYY-MM-DD') AS entry_date,
              e.summary, e.raw_text, e.fields, e.tags, e.needs_review, e.reviewed_at, e.created_at,
-             e.invoice_id, inv.invoice_number, d.source_filename
+             d.source_filename,
+             COALESCE((SELECT json_agg(json_build_object('id', i.id, 'invoice_number', i.invoice_number, 'vendor', i.vendor,
+                                                         'invoice_date', TO_CHAR(i.invoice_date, 'YYYY-MM-DD'))
+                                       ORDER BY i.invoice_date, i.invoice_number)
+                       FROM logbook_entry_invoices lei JOIN invoices i ON i.id = lei.invoice_id
+                       WHERE lei.entry_id = e.id), '[]'::json) AS invoices
       FROM logbook_entries e
       JOIN logbook_documents d ON d.id = e.document_id
-      LEFT JOIN invoices inv ON inv.id = e.invoice_id
       WHERE ${conditions.join(' AND ')}
       ORDER BY e.entry_date ${sortDir} NULLS LAST, d.source_filename, e.page_number
       LIMIT 500
     `, params);
 
-    res.json(rows);
+    const oilMatches = await oilAnalysis.matchSamplesToEntries(partnershipId, rows);
+    res.json(rows.map(r => ({ ...r, oil_sample: oilMatches.get(r.id) ?? null })));
   } catch (err) {
     if (err.status) return res.status(err.status).json({ error: err.message });
     console.error('GET /logbook/entries error:', err);
@@ -246,14 +265,18 @@ router.post('/ask', async (req, res) => {
       ORDER BY e.entry_date ASC NULLS LAST
     `, [partnershipId]);
 
-    if (entries.length === 0) {
+    // Oil analysis lab reports are part of the engine's maintenance history too.
+    const oilSamples = await oilAnalysis.listSamples(partnershipId);
+
+    if (entries.length === 0 && oilSamples.length === 0) {
       return res.json({
         answer: "No logbook entries have been imported yet, so I can't answer questions about the aircraft's maintenance history.",
         citations: [],
       });
     }
 
-    const corpus = buildCorpus(entries);
+    const corpus = buildCorpus(entries) +
+      (oilSamples.length ? `\n\n---\n\nOIL ANALYSIS SAMPLES (lab reports; ppm = parts per million):\n\n${oilAnalysis.chatCorpus(oilSamples)}` : '');
 
     const historyMessages = Array.isArray(history)
       ? history.slice(-6).flatMap(h => [
@@ -264,8 +287,9 @@ router.post('/ask', async (req, res) => {
 
     const systemPrompt =
       'You are answering questions about an aircraft\'s maintenance history using ONLY the ' +
-      'logbook entries provided below. These entries were OCR-transcribed from scanned paper ' +
-      'logbooks and may be incomplete. Cite the specific entries you used by their ID. If the ' +
+      'logbook entries and engine oil analysis lab reports provided below. The logbook entries were ' +
+      'OCR-transcribed from scanned paper logbooks and may be incomplete. For oil analysis, compare ' +
+      'wear metals per hour on the oil and use the lab\'s comments. Cite the specific entries you used by their ID. If the ' +
       'entries don\'t contain the answer, say so plainly rather than guessing or using outside ' +
       'knowledge. Respond with ONLY a JSON object, no other text: ' +
       '{"answer": "<your answer in plain English, written for an aircraft owner>", ' +
@@ -312,6 +336,15 @@ router.post('/ask', async (req, res) => {
         entry_date: e.entry_date,
         summary: e.summary,
       }));
+    for (const s of oilSamples) {
+      if (!citedIds.includes(`oil:${s.id}`)) continue;
+      citations.push({
+        id: `oil:${s.id}`, document_id: s.file_id, category: 'oil_analysis',
+        source_filename: s.filename || 'Oil analysis', page_number: s.page_number, entry_date: s.sample_date,
+        summary: `${s.lab || 'Oil analysis'} ${s.lab_number || ''} — ${s.oil_hours ?? '?'} hrs on oil`,
+        url: s.file_id ? `/api/oil-analysis/files/${s.file_id}/file${s.page_number ? `#page=${s.page_number}` : ''}` : null,
+      });
+    }
 
     res.json({ answer: parsed.answer, citations });
   } catch (err) {

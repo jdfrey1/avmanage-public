@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, Plus, RefreshCw } from 'lucide-react'
 import { api, type RecurringCharge, type PartnershipMember } from '@/lib/api'
 import { useAuth } from '@/context/AuthContext'
@@ -24,13 +25,13 @@ interface EditState {
 }
 
 export function RecurringCharges() {
-  const navigate = useNavigate()
   const { user } = useAuth()
   const [searchParams] = useSearchParams()
 
   const [recurring, setRecurring]       = useState<RecurringCharge[]>([])
   const [lessees, setLessees]           = useState<PartnershipMember[]>([])
   const [selectedLesseeId, setLesseeId] = useState<string>('')
+  const goBack = useGoBack(selectedLesseeId ? `/ledger?lessee_id=${selectedLesseeId}` : '/ledger')
   const [loading, setLoading]           = useState(true)
   const [error, setError]               = useState('')
   const [showForm, setShowForm]         = useState(false)
@@ -184,7 +185,7 @@ export function RecurringCharges() {
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-3">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate(selectedLesseeId ? `/ledger?lessee_id=${selectedLesseeId}` : '/ledger')}
+            onClick={goBack}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
           >
             <ChevronLeft className="h-5 w-5" />

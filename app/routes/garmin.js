@@ -5,10 +5,8 @@ const path = require('path');
 const zlib = require('zlib');
 const pool = require('../db');
 const requireAuth = require('../middleware/requireAuth');
-const googleAuth = require('../services/googleAuth');
-const googleDrive = require('../services/googleDrive');
-const { parseGarminLog } = require('../services/garminLog');
-const { findFlight, matchUnattached } = require('../services/garminMatch');
+const { matchUnattached } = require('../services/garminMatch');
+const { storeGarminLog, SUMMARY, UPLOADS_DIR } = require('../services/garminImport');
 const engineAnalysis = require('../services/engineAnalysis');
 
 // Garmin avionics data logs ("Original CSV" downloads from flyGarmin), one per engine run.
@@ -18,7 +16,6 @@ const engineAnalysis = require('../services/engineAnalysis');
 const router = express.Router();
 router.use(requireAuth);
 
-const UPLOADS_DIR = process.env.UPLOADS_DIR || '/data/uploads';
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 40 * 1024 * 1024, files: 30 } });
 
 async function getMembership(userId) {
@@ -32,22 +29,6 @@ const fail = (res, err, tag) => {
   console.error(`${tag} error:`, err);
   res.status(500).json({ error: 'Internal server error' });
 };
-
-// Summary columns returned everywhere (never the bulky series).
-const SUMMARY = `id, flight_id, filename, started_at, ended_at, engine_on_at, engine_off_at, takeoff_at, landing_at,
-  engine_hrs::float, air_hrs::float, fuel_used_gal::float, fuel_start_gal::float, fuel_end_gal::float,
-  origin, destination, max_cht::float, max_cht_cyl, stats`;
-
-async function archiveToDrive(id, name, buffer) {
-  if (!(await googleAuth.isConnected())) return;
-  try {
-    await googleDrive.ensureFolderStructure(); // adds the Garmin folder on installs connected before it existed
-    const fileId = await googleDrive.uploadFile('garminLogs', { name, mimeType: 'text/csv', buffer });
-    await pool.query('UPDATE garmin_data_logs SET drive_file_id = $2 WHERE id = $1', [id, fileId]);
-  } catch (err) {
-    console.error(`Drive sync failed for Garmin log ${name}:`, err.message);
-  }
-}
 
 // POST /api/garmin/upload  (multipart "logs", one or more; optional flight_id to attach all to,
 // or hold=1 to leave them unattached — Log Flight attaches them once the new flight is saved)
@@ -66,27 +47,11 @@ router.post('/upload', upload.array('logs', 30), async (req, res) => {
     for (const file of req.files) {
       const name = file.originalname.replace(/(\.csv)+$/i, '.csv');
       try {
-        const log = parseGarminLog(file.buffer.toString('utf8'), name);
-        const { rows: [dup] } = await pool.query(
-          `SELECT ${SUMMARY} FROM garmin_data_logs WHERE partnership_id = $1 AND started_at = $2`, [partnership_id, log.started_at]);
-        if (dup) { results.push({ filename: name, status: 'duplicate', log: dup }); continue; }
-
-        const flightId = forFlight || (req.body.hold === '1' ? null : await findFlight(partnership_id, log));
-        const fileKey = `garmin/${log.started_at.toISOString().replace(/[:.]/g, '-')}_${(log.origin || 'log').replace(/\W/g, '')}.csv.gz`;
-        fs.mkdirSync(path.join(UPLOADS_DIR, 'garmin'), { recursive: true });
-        fs.writeFileSync(path.join(UPLOADS_DIR, fileKey), zlib.gzipSync(file.buffer));
-        const { rows: [row] } = await pool.query(
-          `INSERT INTO garmin_data_logs
-             (partnership_id, flight_id, filename, file_key, started_at, ended_at, engine_on_at, engine_off_at,
-              takeoff_at, landing_at, engine_hrs, air_hrs, fuel_used_gal, fuel_start_gal, fuel_end_gal,
-              origin, destination, max_cht, max_cht_cyl, stats, series, meta, uploaded_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
-           RETURNING ${SUMMARY}`,
-          [partnership_id, flightId, name, fileKey, log.started_at, log.ended_at, log.engine_on_at, log.engine_off_at,
-           log.takeoff_at, log.landing_at, log.engine_hrs, log.air_hrs, log.fuel_used_gal, log.fuel_start_gal, log.fuel_end_gal,
-           log.origin, log.destination, log.max_cht, log.max_cht_cyl, log.stats, log.series, log.meta, req.session.userId]);
-        results.push({ filename: name, status: flightId ? 'attached' : 'unmatched', log: row });
-        archiveToDrive(row.id, name, file.buffer); // not awaited: Drive is slow and best-effort
+        const r = await storeGarminLog({
+          partnershipId: partnership_id, userId: req.session.userId, name, buffer: file.buffer,
+          flightId: forFlight || (req.body.hold === '1' ? null : undefined),
+        });
+        results.push({ filename: name, ...r });
       } catch (err) {
         if (!err.status) console.error(`Garmin log ${name} failed:`, err);
         results.push({ filename: name, status: 'error', error: err.status ? err.message : 'Could not read this file' });

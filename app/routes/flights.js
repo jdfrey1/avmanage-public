@@ -12,6 +12,7 @@ const garminMatch = require('../services/garminMatch');
 const googleAuth = require('../services/googleAuth');
 const reports = require('../services/reports');
 const leaseBilling = require('../services/leaseBilling');
+const { archiveFlightPhotoSoon } = require('../services/flightPhotoArchive');
 
 const router = express.Router();
 router.use(requireAuth);
@@ -185,21 +186,8 @@ router.post('/ocr-photo', upload.single('photo'), async (req, res) => {
 
     res.json({ hobbs, flight, image_key: imageKey });
 
-    // Archive a copy to the shared Google Drive, if connected. Fire-and-forget: the Claude
-    // Vision call above already made this request slow, so don't stack an awaited Drive
-    // upload on top of it — the response has already gone out. The flight record this photo
-    // belongs to (matched by ocr_source_image_key) may not exist yet, since the user still
-    // has to review/submit the form — best-effort link, not guaranteed.
-    googleAuth.isConnected().then(async (connected) => {
-      if (!connected) return;
-      const driveFileId = await googleDrive.uploadFile('flightPhotos', {
-        name: imageKey, mimeType: req.file.mimetype, buffer: req.file.buffer,
-      });
-      await pool.query(
-        'UPDATE flights SET drive_file_id = $1 WHERE ocr_source_image_key = $2 AND drive_file_id IS NULL',
-        [driveFileId, imageKey]
-      );
-    }).catch((err) => console.error(`Drive sync failed for gauge photo ${imageKey}:`, err.message));
+    // The Drive copy is made once the flight is saved (services/flightPhotoArchive), so it
+    // can be named by date, pilot and route.
   } catch (err) {
     console.error('POST /flights/ocr-photo error:', err);
     res.status(500).json({ error: 'Failed to process photo' });
@@ -253,6 +241,7 @@ router.post('/', async (req, res) => {
 
     await syncFlightToGoogle(flight.id);
     leaseBilling.syncExcessHoursSoon(partnershipId);
+    if (flight.ocr_source_image_key) archiveFlightPhotoSoon(flight.id);
     require('../services/flightaware').matchFlights().catch(() => {});
 
     // Garmin logs uploaded before this flight was logged can match it now.
@@ -348,6 +337,8 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
+    // A replaced gauge photo gets its own Drive copy.
+    if (updates.some(([k]) => k === 'ocr_source_image_key')) updates.push(['drive_file_id', null]);
     const setClauses = updates.map(([k], i) => `${k} = $${i + 2}`).join(', ');
     const values = updates.map(([, v]) => v);
 
@@ -363,6 +354,7 @@ router.patch('/:id', async (req, res) => {
 
     await syncFlightToGoogle(req.params.id);
     leaseBilling.syncExcessHoursSoon(partnershipId);
+    if (flight.ocr_source_image_key) archiveFlightPhotoSoon(req.params.id);
     if ('flight_date' in req.body || 'route' in req.body) {
       garminMatch.matchUnattached(partnershipId).catch(err => console.error('Garmin match failed:', err.message));
     }

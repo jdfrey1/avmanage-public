@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Select } from '@/components/ui/select'
 import { useNavigate, useParams } from 'react-router-dom'
+import { useGoBack } from '@/lib/navigation'
 import { ChevronLeft, Trash2 } from 'lucide-react'
 import { api, documentsApi, uploadInvoice, type AircraftDocument, type LedgerEntry, type PartnershipMember } from '@/lib/api'
 import { Button } from '@/components/ui/button'
@@ -77,6 +78,7 @@ export function EditLedgerEntry() {
   }
 
   const ledgerUrl = lesseeId ? `/ledger?lessee_id=${lesseeId}` : '/ledger'
+  const goBack = useGoBack(ledgerUrl)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -89,14 +91,14 @@ export function EditLedgerEntry() {
       if (invoiceFile && id) {
         try {
           const inv = await uploadInvoice(invoiceFile, [id])
-          navigate(inv.parsed ? ledgerUrl : `/invoices/${inv.id}`)
+          inv.parsed ? goBack() : navigate(`/invoices/${inv.id}`)
           return
         } catch (err: any) {
           setError(`Entry saved, but the invoice upload failed: ${err instanceof Error ? err.message : 'error'}`)
           return
         }
       }
-      navigate(ledgerUrl)
+      goBack()
     } catch (err: any) {
       setError(err instanceof Error ? err.message : 'Failed to save')
     } finally {
@@ -109,7 +111,7 @@ export function EditLedgerEntry() {
     setDeleting(true)
     try {
       await api.delete(`/ledger/${id}`)
-      navigate(ledgerUrl)
+      goBack()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete')
       setDeleting(false)
@@ -125,7 +127,7 @@ export function EditLedgerEntry() {
       <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-4 py-3">
         <div className="flex items-center gap-2">
           <button
-            onClick={() => navigate(ledgerUrl)}
+            onClick={() => goBack()}
             className="rounded-md p-1 text-muted-foreground hover:text-foreground"
           >
             <ChevronLeft className="h-5 w-5" />
