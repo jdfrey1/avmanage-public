@@ -134,6 +134,12 @@ async function findFileId(folderKey, name) {
   return data.files[0]?.id ?? null;
 }
 
+// Replaces the contents of a file the app created (name and folder unchanged).
+async function updateFileContent(fileId, { mimeType, buffer }) {
+  const drive = await getDriveClient();
+  await drive.files.update({ fileId, media: { mimeType, body: Readable.from(buffer) } });
+}
+
 async function renameFile(fileId, name) {
   const drive = await getDriveClient();
   await drive.files.update({ fileId, requestBody: { name } });
@@ -150,4 +156,4 @@ async function moveFile(fileId, folderKey) {
   await drive.files.update({ fileId, addParents: folderId, removeParents: from || undefined, fields: 'id, parents' });
 }
 
-module.exports = { ensureFolderStructure, uploadFile, findFileId, renameFile, moveFile, listFileNames, FOLDER_NAMES, SUBFOLDERS };
+module.exports = { ensureFolderStructure, uploadFile, updateFileContent, findFileId, renameFile, moveFile, listFileNames, FOLDER_NAMES, SUBFOLDERS };

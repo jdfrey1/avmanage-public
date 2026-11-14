@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Download, Upload } from 'lucide-react'
+import { Download, Globe, Upload } from 'lucide-react'
 import { api, type Flight, type GarminLog, type GarminSeries, type GarminUploadResult } from '@/lib/api'
 import { Select } from '@/components/ui/select'
 import { LineChart, SERIES_COLORS, timeTicks, type LineSeries } from '@/components/LineChart'
@@ -94,6 +94,18 @@ function LogRow({ log, onChange }: { log: GarminLog; onChange: () => void }) {
   const [open, setOpen] = useState(false)
   const [confirm, setConfirm] = useState(false)
   const [msg, setMsg] = useState('')
+  const [earthHint, setEarthHint] = useState(false)
+  // Drive has no "Open with → Google Earth" for most accounts, so: download the KML and open
+  // Google Earth in a new tab, where it's imported (Projects → New → Import KML file).
+  function openEarth() {
+    const a = document.createElement('a')
+    a.href = `/api/garmin/${log.id}/kml`
+    a.download = ''
+    document.body.appendChild(a); a.click(); a.remove()
+    window.open('https://earth.google.com/web/', '_blank', 'noopener')
+    setMsg('')
+    setEarthHint(true)
+  }
   async function detach() {
     try { await api.post(`/garmin/${log.id}/detach`, {}); onChange() }
     catch { setMsg('Could not detach.'); setConfirm(false) }
@@ -107,6 +119,9 @@ function LogRow({ log, onChange }: { log: GarminLog; onChange: () => void }) {
           {hrs(log.engine_hrs)} engine · {hrs(log.air_hrs)} air · {log.fuel_used_gal?.toFixed(1) ?? '—'} gal
         </span>
         <button type="button" onClick={() => setOpen(true)} className="text-primary hover:underline">Map &amp; charts</button>
+        <button type="button" onClick={openEarth} className="inline-flex items-center gap-0.5 text-primary hover:underline" title="Downloads the 3D track (.kml) and opens Google Earth to import it">
+          <Globe className="h-3 w-3" /> Google Earth
+        </button>
         <a href={`/api/garmin/${log.id}/download`} className="inline-flex items-center gap-0.5 text-muted-foreground hover:text-foreground" title="Download original CSV">
           <Download className="h-3 w-3" />
         </a>
@@ -130,6 +145,13 @@ function LogRow({ log, onChange }: { log: GarminLog; onChange: () => void }) {
         </p>
       ))}
       {msg && <p className="mt-1 text-destructive">{msg}</p>}
+      {earthHint && (
+        <p className="mt-1 text-muted-foreground">
+          In Google Earth: <span className="font-medium text-foreground">Projects → New project → Import KML file from computer</span>, then pick the downloaded .kml
+          (also saved in Drive → Garmin Data Logs, for “Import from Google Drive”).{' '}
+          <button type="button" onClick={() => setEarthHint(false)} className="underline">Hide</button>
+        </p>
+      )}
       {open && <GarminModal log={log} onClose={() => setOpen(false)} />}
     </div>
   )

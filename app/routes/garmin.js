@@ -8,6 +8,7 @@ const requireAuth = require('../middleware/requireAuth');
 const { matchUnattached } = require('../services/garminMatch');
 const { storeGarminLog, SUMMARY, UPLOADS_DIR } = require('../services/garminImport');
 const engineAnalysis = require('../services/engineAnalysis');
+const garminKml = require('../services/garminKml');
 
 // Garmin avionics data logs ("Original CSV" downloads from flyGarmin), one per engine run.
 // Uploaded logs are matched to the logged flight on the same local date (narrowed by
@@ -143,6 +144,31 @@ router.get('/:id/download', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${(r.filename || 'garmin_log.csv').replace(/"/g, '')}"`);
     fs.createReadStream(p).pipe(zlib.createGunzip()).pipe(res);
   } catch (err) { fail(res, err, 'GET /garmin/:id/download'); }
+});
+
+// GET /api/garmin/:id/earth — Drive link to the log's Google Earth (KML) track, made on first use.
+router.get('/:id/earth', async (req, res) => {
+  try {
+    const { partnership_id } = await getMembership(req.session.userId);
+    const { rows: [r] } = await pool.query('SELECT id FROM garmin_data_logs WHERE id = $1 AND partnership_id = $2', [req.params.id, partnership_id]);
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    const fileId = await garminKml.ensureKml(r.id);
+    if (!fileId) return res.status(409).json({ error: 'Google Drive is not connected, or this log has no position data.' });
+    res.json({ url: `https://drive.google.com/file/d/${fileId}/view` });
+  } catch (err) { fail(res, err, 'GET /garmin/:id/earth'); }
+});
+
+// GET /api/garmin/:id/kml — the Google Earth file itself (to import into Google Earth by hand)
+router.get('/:id/kml', async (req, res) => {
+  try {
+    const { partnership_id } = await getMembership(req.session.userId);
+    const r = await garminKml.kmlFor(req.params.id, partnership_id);
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    if (!r.kml) return res.status(404).json({ error: 'This log has no position data' });
+    res.setHeader('Content-Type', garminKml.KML_MIME);
+    res.setHeader('Content-Disposition', `attachment; filename="${r.name.replace(/"/g, '')}"`);
+    res.send(r.kml);
+  } catch (err) { fail(res, err, 'GET /garmin/:id/kml'); }
 });
 
 // POST /api/garmin/:id/attach { flight_id }

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="avManage">
+  <!-- Full-bleed square: iOS and Android round the corners themselves. -->
+  <rect width="512" height="512" fill="#2f4561"/>
+  <g fill="none" stroke-linejoin="round" transform="translate(256 256)">
+    <polygon points="0,-200 173,-100 173,100 0,200 -173,100 -173,-100" stroke="#7d97b8" stroke-width="16"/>
+    <polygon points="0,-168 145,-84 145,84 0,168 -145,84 -145,-84" stroke="#c9a961" stroke-width="9"/>
+  </g>
+  <g fill="#eef1f5" transform="translate(256 262) rotate(-30) scale(0.72)">
+    <path d="M-12,-150 C-12,-172 12,-172 12,-150 L14,-40 L190,-6 L190,18 L14,10 L10,110 L62,128 L62,146 L0,140 L-62,146 L-62,128 L-10,110 L-14,10 L-190,18 L-190,-6 L-14,-40 Z"/>
+  </g>
+</svg>

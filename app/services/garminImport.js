@@ -23,6 +23,7 @@ async function archiveToDrive(id, name, buffer) {
     await googleDrive.ensureFolderStructure(); // adds the Garmin folder on installs connected before it existed
     const fileId = await googleDrive.uploadFile('garminLogs', { name, mimeType: 'text/csv', buffer });
     await pool.query('UPDATE garmin_data_logs SET drive_file_id = $2 WHERE id = $1', [id, fileId]);
+    await require('./garminKml').ensureKml(id); // Google Earth track next to the CSV
   } catch (err) {
     console.error(`Drive sync failed for Garmin log ${name}:`, err.message);
   }

@@ -104,7 +104,12 @@ router.post('/api-key', async (req, res) => {
 router.post('/sync', async (req, res) => {
   try {
     await getMembership(req.session.userId);
-    res.json(await flightaware.sync(Math.min(parseInt(req.query.days) || 3, 90)));
+    const days = Math.min(parseInt(req.query.days) || 3, 90);
+    const result = await flightaware.sync(days);
+    // Garmin Pilot data logs arrive in the same inbox; the hourly job polls both, so does this button.
+    const garmin = await require('../services/garminEmail').pollEmails(Math.max(days, 14))
+      .catch(err => ({ error: err.message }));
+    res.json({ ...result, garmin });
   } catch (err) { fail(res, err, 'POST /flightaware/sync'); }
 });
 

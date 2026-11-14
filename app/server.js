@@ -23,7 +23,7 @@ const invoicesRouter     = require('./routes/invoices');
 const setupRouter        = require('./routes/setup');
 const { migrate }        = require('./migrate');
 const googleAuth         = require('./services/googleAuth');
-const { findBrandingMark } = require('./services/branding');
+const { findBrandingMark, brandingIcon } = require('./services/branding');
 const { initCron }       = require('./services/backupCron');
 const { initCron: initReportCron } = require('./services/reportCron');
 const { initCron: initLeaseBilling } = require('./services/leaseBilling');
@@ -96,6 +96,14 @@ app.get('/branding/mark', (req, res) => {
   res.set('Cache-Control', 'no-cache');
   const custom = findBrandingMark();
   res.sendFile(custom || path.join(publicDir, 'avmanage-mark.svg'));
+});
+// App icons (home screen, browser tab): made from the uploaded image when there is one,
+// otherwise the generic files in public/.
+const ICON_FILES = { '/apple-touch-icon.png': 180, '/icon-192.png': 192, '/icon-512.png': 512, '/favicon-32.png': 32 };
+app.get(Object.keys(ICON_FILES), (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  const custom = brandingIcon(ICON_FILES[req.path]);
+  res.sendFile(custom || path.join(publicDir, req.path.slice(1)));
 });
 app.use(express.static(publicDir));
 
