@@ -40,7 +40,7 @@ export function indexTicks(n: number, count = 6) {
 }
 
 export function LineChart({
-  title, x, series, unit = '', xLabel, xTicks, digits = 0, height: heightProp, hover: hoverProp, onHover,
+  title, x, series, unit = '', xLabel, xTicks, digits = 0, height: heightProp, hover: hoverProp, onHover, markers, bands,
 }: {
   title: string
   x: number[]
@@ -52,6 +52,10 @@ export function LineChart({
   height?: number
   hover?: number | null
   onHover?: (i: number | null) => void
+  /** Vertical lines at these x values (e.g. when a finding happened). */
+  markers?: { x: number; label?: string }[]
+  /** Shaded x ranges behind the lines (e.g. the cruise stretches a finding was averaged over). */
+  bands?: [number, number][]
 }) {
   const [localHover, setLocalHover] = useState<number | null>(null)
   const hover = onHover ? (hoverProp ?? null) : localHover
@@ -126,8 +130,14 @@ export function LineChart({
         className="h-auto w-full touch-pan-y select-none rounded bg-muted/30"
         onPointerMove={onMove}
         onPointerDown={onMove}
-        onPointerLeave={() => setHover(null)}
+        // Touch: the cursor stays where the finger was lifted (pointerleave fires on lift).
+        // Mouse: it clears when the pointer leaves the chart.
+        onPointerLeave={e => { if (e.pointerType === 'mouse') setHover(null) }}
       >
+        {(bands ?? []).map(([a, b]) => {
+          const l = px(Math.max(a, x0)), r = px(Math.min(b, x1))
+          return r > l ? <rect key={`${a}-${b}`} x={l} y={PAD_T} width={r - l} height={plotH} className="fill-sky-500/10" /> : null
+        })}
         {yTicks.map(v => (
           <g key={v}>
             <line x1={PAD_L} x2={W - PAD_R} y1={py(v)} y2={py(v)} className="stroke-border" strokeWidth="0.7" />
@@ -153,6 +163,13 @@ export function LineChart({
             <title>{`${s.label}: ${s.values[i]!.toFixed(digits)} — flagged`}</title>
           </circle>
         )))}
+        {(markers ?? []).filter(m => m.x >= x0 && m.x <= x1).map(m => (
+          <g key={m.x}>
+            <line x1={px(m.x)} x2={px(m.x)} y1={PAD_T} y2={PAD_T + plotH} stroke="#ef4444" strokeWidth="1.5" strokeDasharray="4 3" />
+            <path d={`M${px(m.x) - 5},${PAD_T} L${px(m.x) + 5},${PAD_T} L${px(m.x)},${PAD_T + 7} Z`} fill="#ef4444" />
+            {m.label && <title>{m.label}</title>}
+          </g>
+        ))}
         {hover != null && (
           <line x1={px(x[hover])} x2={px(x[hover])} y1={PAD_T} y2={PAD_T + plotH} className="stroke-foreground/60" strokeWidth="1" />
         )}

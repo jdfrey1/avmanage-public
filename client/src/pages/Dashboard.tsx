@@ -353,7 +353,7 @@ export function Dashboard() {
                     {f.title}
                     {f.run && (
                       <span className="block text-xs text-muted-foreground">
-                        {new Date(f.run.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · {f.run.origin ?? '?'}→{f.run.destination ?? '?'}{f.run.pilot_name && ` · ${f.run.pilot_name.split(' ')[0]}`}
+                        {new Date(f.run.started_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} · {f.run.origin ?? '?'}→{f.run.destination ?? '?'}{f.run.pilot_name && ` · ${f.run.pilot_name.split(' ')[0]}`}{f.when && ` · ${f.when}`}
                       </span>
                     )}
                   </span>

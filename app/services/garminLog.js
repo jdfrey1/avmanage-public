@@ -9,7 +9,7 @@ const path = require('path');
 const SERIES_STEP = 5; // seconds between samples kept for charts
 
 // Bump when the parser's stats change; stored logs with an older version are re-parsed at startup.
-const PARSER_VERSION = 5;
+const PARSER_VERSION = 8; // 6: cruise spans and per-metric peak times; 7: peaks only within spans; 8: steady-power misfire check
 
 // Continental IO-550-N (SR22) limits and the cautions we flag below them.
 const LIMITS = {
@@ -18,6 +18,9 @@ const LIMITS = {
   oilPressLow: 30, oilPressMin: 10, oilPressHigh: 70, // psi; green arc 30–60
   shockCoolRate: 50,                     // °F per minute CHT drop
   egtDip: 75,                            // °F single-cylinder EGT drop in 10 s while others hold
+  egtDipSustained: 50,                   // °F still down (vs. the other cylinders) 20 s later
+  steadyRpm: 60, steadyMap: 0.6, steadyFf: 1.0, // max range over ±20 s to count as steady power
+  misfireMinPwr: 0.4,                    // only look for misfires above 40% power
   voltLow: 26.0, ampDischarge: -2,       // 28 V system, after warm-up
   warmupSec: 120,
 };
@@ -70,30 +73,65 @@ function findEvents(rows, num, running) {
   }
   if (cool) add('shock_cooling', 'caution', `Shock cooling: CHT #${cool.cyl} fell ${Math.round(cool.value)}°F in a minute`, cool.ms, { cyl: cool.cyl, value: Math.round(cool.value) });
 
-  // Single-cylinder EGT dips while the others hold steady: a possible misfire (plug, injector, valve).
+  // Single-cylinder EGT drop while the others hold steady: a possible misfire (plug, ignition
+  // lead, injector, valve). Power changes (throttle, prop, mixture) and idle shift EGTs unevenly
+  // between cylinders as a matter of course, so only drops in steady flight count:
+  //  1. airborne above 40% power;
+  //  2. RPM, MAP and fuel flow all steady for 20 s either side (no power or mixture change);
+  //  3. the cylinder dropped > 75°F in 10 s while the median of the other five moved < 25°F;
+  //  4. and it matters: still ≥ 50°F down against the others 20 s later (sustained), or it keeps
+  //     happening — 3 or more separate brief drops in one flight (intermittent).
+  const egts = (r) => cyl.map(c => num(r, `E1 EGT${c}`));
+  const rangeOk = (rs, col, max) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const r of rs) { const v = num(r, col); if (v == null) return false; if (v < lo) lo = v; if (v > hi) hi = v; }
+    return hi - lo <= max;
+  };
+  // warm rows ≈ 1 s apart; idx of the row about dt seconds from row i (null across a gap).
+  const near = (i, dt) => {
+    const target = warm[i].ms + dt * 1000;
+    let j = i;
+    while (dt > 0 ? j + 1 < warm.length && warm[j].ms < target : j > 0 && warm[j].ms > target) j += dt > 0 ? 1 : -1;
+    return Math.abs(warm[j].ms - target) <= 3000 ? j : null;
+  };
+  const steadyAt = (i) => {
+    const a = near(i, -20), b = near(i, 20);
+    if (a == null || b == null) return false;
+    const win = warm.slice(a, b + 1);
+    return rangeOk(win, 'E1 RPM', LIMITS.steadyRpm) && rangeOk(win, 'E1 MAP', LIMITS.steadyMap) && rangeOk(win, 'E1 FFlow', LIMITS.steadyFf);
+  };
+  // Cylinder k's EGT minus the average of the other five.
+  const rel = (r, k) => { const e = egts(r); if (e.some(v => v == null)) return null; return e[k] - (e.reduce((s, v) => s + v, 0) - e[k]) / 5; };
   const dips = {};
   for (let i = 10; i < warm.length; i++) {
-    const r = warm[i], p = warm[i - 10];
-    if (r.ms - p.ms > 15000) continue;
-    const d = cyl.map(c => { const a = num(r, `E1 EGT${c}`), b = num(p, `E1 EGT${c}`); return a != null && b != null ? a - b : null; });
-    if (d.some(v => v == null)) continue;
-    d.forEach((v, k) => {
+    const r = warm[i];
+    if ((num(r, 'IAS') ?? 0) < 50 || (num(r, 'E1 %Pwr') ?? 0) < LIMITS.misfireMinPwr) continue;
+    const pi = near(i, -10);
+    if (pi == null) continue;
+    const now = egts(r), before = egts(warm[pi]);
+    if (now.some(v => v == null) || before.some(v => v == null)) continue;
+    const d = now.map((v, k) => v - before[k]);
+    for (let k = 0; k < 6; k++) {
       const others = d.filter((_, m) => m !== k).sort((x, y) => x - y);
       const med = (others[2] + others[3]) / 2;
-      if (v < -LIMITS.egtDip && Math.abs(med) < 25) {
-        const c = k + 1;
-        if (!dips[c] || r.ms - dips[c].lastMs > 30000) {
-          dips[c] = { count: (dips[c]?.count ?? 0) + 1, lastMs: r.ms, firstMs: dips[c]?.firstMs ?? r.ms, worst: Math.min(dips[c]?.worst ?? 0, v) };
-        } else {
-          dips[c].lastMs = r.ms; dips[c].worst = Math.min(dips[c].worst, v);
-        }
-      }
-    });
+      if (!(d[k] < -LIMITS.egtDip && Math.abs(med) < 25)) continue;
+      const c = k + 1;
+      if (dips[c] && r.ms - dips[c].lastMs <= 30000) { dips[c].lastMs = r.ms; continue; } // same drop
+      if (!steadyAt(i)) continue;
+      const after = near(i, 20), base = rel(warm[pi], k), later = after != null ? rel(warm[after], k) : null;
+      const sustained = base != null && later != null && base - later >= LIMITS.egtDipSustained;
+      const prev = dips[c] || { count: 0, sustained: 0, worst: 0, firstMs: r.ms };
+      dips[c] = { count: prev.count + 1, sustained: prev.sustained + (sustained ? 1 : 0), worst: Math.min(prev.worst, d[k]),
+        firstMs: prev.firstMs, firstSustainedMs: prev.firstSustainedMs ?? (sustained ? r.ms : undefined), lastMs: r.ms };
+    }
   }
   for (const [c, d] of Object.entries(dips)) {
-    add('egt_dip', d.count >= 3 ? 'warning' : 'caution',
-      `EGT #${c} dropped ${Math.round(-d.worst)}°F while other cylinders held steady${d.count > 1 ? ` (${d.count} times)` : ''} — possible misfire`,
-      d.firstMs, { cyl: Number(c), value: d.count });
+    if (!d.sustained && d.count < 3) continue; // a single brief dip in steady flight isn't worth an alert
+    const what = d.sustained
+      ? `EGT #${c} dropped ${Math.round(-d.worst)}°F at steady power and stayed down while the other cylinders held`
+      : `EGT #${c} dipped up to ${Math.round(-d.worst)}°F ${d.count} times at steady power while the other cylinders held`;
+    add('egt_dip', d.count >= 3 || -d.worst >= 150 ? 'warning' : 'caution', `${what} — possible misfire`,
+      d.firstSustainedMs ?? d.firstMs, { cyl: Number(c), value: d.count });
   }
 
   const oilT = sustained(running, r => (num(r, 'E1 OilT') ?? 0) > LIMITS.oilTempCaution, r => num(r, 'E1 OilT'));
@@ -130,6 +168,53 @@ const SERIES_COLS = {
 
 const round = (v, d) => (v == null ? null : Math.round(v * 10 ** d) / 10 ** d);
 const avg = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
+
+// Per-second values of the cruise metrics that engineAnalysis compares between flights (same keys).
+const CYLS = [1, 2, 3, 4, 5, 6];
+const devOf = (vals, c) => (vals.some(v => v == null) ? null : vals[c - 1] - avg(vals));
+const ROW_METRICS = {
+  ...Object.fromEntries(CYLS.map(c => [`cht_dev${c}`, (r, num) => devOf(CYLS.map(k => num(r, `E1 CHT${k}`)), c)])),
+  ...Object.fromEntries(CYLS.map(c => [`egt_dev${c}`, (r, num) => devOf(CYLS.map(k => num(r, `E1 EGT${k}`)), c)])),
+  cht_spread: (r, num) => { const v = CYLS.map(k => num(r, `E1 CHT${k}`)); return v.some(x => x == null) ? null : Math.max(...v) - Math.min(...v); },
+  oilt: (r, num) => num(r, 'E1 OilT'),
+  oilp: (r, num) => num(r, 'E1 OilP'),
+  ff_per_pwr: (r, num) => { const ff = num(r, 'E1 FFlow'), p = num(r, 'E1 %Pwr'); return ff != null && p > 0.4 ? (ff / p) * 0.65 : null; },
+};
+const SMOOTH = 30; // seconds averaged, so a single noisy sample isn't "the moment"
+
+// Where in the flight the cruise numbers came from: the level-cruise stretches (spans, as
+// [from, to] ISO times, 1 min or longer) and, per metric, when its 30-s average was highest and
+// lowest (peaks[key] = { hi: [iso, value], lo: [iso, value] }). Lets a finding say when the
+// outlying reading happened and the chart mark it.
+function cruiseMoments(allCruise, num) {
+  let groups = [];
+  for (const r of allCruise) {
+    const g = groups[groups.length - 1];
+    if (g && r.ms - g[g.length - 1].ms <= 30000) g.push(r); else groups.push([r]);
+  }
+  groups = groups.filter(g => g[g.length - 1].ms - g[0].ms >= 60000);
+  const spans = groups.map(g => [g[0].ms, g[g.length - 1].ms]);
+  const cruise = groups.flat(); // peaks only inside the stretches that get shaded on the chart
+  const peaks = {};
+  for (const [key, fn] of Object.entries(ROW_METRICS)) {
+    const vals = cruise.map(r => fn(r, num));
+    let hi = null, lo = null, sum = 0, n = 0;
+    for (let i = 0; i < vals.length; i++) {
+      if (vals[i] != null) { sum += vals[i]; n++; }
+      const j = i - SMOOTH;
+      if (j >= 0 && vals[j] != null) { sum -= vals[j]; n--; }
+      if (n < SMOOTH / 2) continue;
+      const v = sum / n, at = cruise[Math.floor(i - Math.min(i, SMOOTH) / 2)].ms; // middle of the window
+      if (!hi || v > hi[1]) hi = [at, v];
+      if (!lo || v < lo[1]) lo = [at, v];
+    }
+    if (hi) peaks[key] = { hi: [new Date(hi[0]).toISOString(), round(hi[1], 1)], lo: [new Date(lo[0]).toISOString(), round(lo[1], 1)] };
+  }
+  return {
+    spans: spans.map(s => s.map(ms => new Date(ms).toISOString())),
+    peaks,
+  };
+}
 
 function parseMeta(line) {
   const meta = {};
@@ -207,6 +292,7 @@ function parseGarminLog(text, filename = '') {
     cht: cyl.map(c => cAvg(`E1 CHT${c}`)), egt: cyl.map(c => cAvg(`E1 EGT${c}`)),
     oilt: cAvg('E1 OilT'), oilp: cAvg('E1 OilP'), ff: cAvg('E1 FFlow', 1), map: cAvg('E1 MAP', 1),
     rpm: cAvg('E1 RPM'), pwr: cAvg('E1 %Pwr', 2), tas: cAvg('TAS'), alt: cAvg('AltMSL'), oat: cAvg('OAT'),
+    ...cruiseMoments(cruise, num),
   } : null;
 
   // Airports: departure from the filename (log_YYMMDD_HHMMSS_KPAO.csv), arrival = last

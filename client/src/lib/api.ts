@@ -68,6 +68,12 @@ export interface EngineFinding {
   ack?: { note: string | null; acked_at: string; acked_by_name: string | null }
   kind: 'limit' | 'event' | 'outlier' | 'trend'; severity: 'warning' | 'caution' | 'info'
   title: string; detail: string | null; log_id: string; at: string; metric: string
+  /** Cylinder the finding is about, if any. */
+  cyl?: number | null
+  /** When in the flight it happened / showed most, and the cruise stretches (ISO times) it was averaged over. */
+  moment?: { at: string; value: number | null; spans: [string, string][] } | null
+  /** e.g. "Most pronounced at 5:32 PM, 26 min after takeoff" */
+  when?: string | null
 }
 export type DashboardFinding = EngineFinding & { run: { started_at: string; origin: string | null; destination: string | null; pilot_name: string | null } | null }
 export interface EngineTrendsResponse {

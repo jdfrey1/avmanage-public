@@ -139,6 +139,19 @@ export function UnmatchedFlightAware({ flights, onChange }: { flights: Flight[];
 
   const day = (iso: string) => new Date(iso).toLocaleDateString('en-CA')
   if (!items) return null
+  // Nothing to act on: one compact line that keeps the actions.
+  if (items.length === 0 && !showIgnored) return (
+    <div className="flex h-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-card px-3 py-2 text-xs">
+      <span className="text-muted-foreground"><span className="font-medium text-foreground">FlightAware</span> · all matched</span>
+      {error && <span className="text-destructive">{error}</span>}
+      <span className="ml-auto flex gap-3">
+        <button type="button" onClick={() => setShowIgnored(true)} className="text-muted-foreground hover:text-foreground hover:underline">Show ignored</button>
+        <button type="button" onClick={sync} disabled={syncing} className="text-primary hover:underline disabled:opacity-50">
+          {syncing ? 'Checking…' : 'Check email now'}
+        </button>
+      </span>
+    </div>
+  )
   return (
     <div className="h-full rounded-lg border bg-card p-3 text-xs">
       <div className="flex items-center justify-between">

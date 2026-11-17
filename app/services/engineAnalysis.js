@@ -65,6 +65,15 @@ function hint(m, dir) {
   return null;
 }
 
+// When in a flight a cruise finding shows most: the moment the metric's 30-s average was furthest
+// in the finding's direction, plus the cruise stretches the flight's average came from.
+// { at, value, spans } or null for logs parsed before v6.
+function momentOf(run, key, dir) {
+  const c = run.stats.cruise;
+  const p = c?.peaks?.[key]?.[dir > 0 ? 'hi' : 'lo'];
+  return p ? { at: p[0], value: p[1], spans: c.spans || [] } : null;
+}
+
 // runs: oldest first, each { id, started_at, stats, ... }; acks: { finding_key: { note, acked_at, acked_by_name } }.
 // Returns { findings (active), addressed, marks, history }.
 function analyze(runs, acks = {}) {
@@ -75,7 +84,7 @@ function analyze(runs, acks = {}) {
   // 1. Events the parser found within each flight.
   for (const r of runs) {
     for (const e of r.stats.events || []) {
-      findings.push({ key: `event:${e.type}:${e.cyl ?? ''}:${r.id}`, kind: e.type === 'cht_high' || e.type.startsWith('oil_') ? 'limit' : 'event', severity: e.severity, title: e.msg, detail: null, log_id: r.id, at: e.at, metric: e.type });
+      findings.push({ key: `event:${e.type}:${e.cyl ?? ''}:${r.id}`, kind: e.type === 'cht_high' || e.type.startsWith('oil_') ? 'limit' : 'event', severity: e.severity, title: e.msg, detail: null, log_id: r.id, at: e.at, metric: e.type, cyl: e.cyl ?? null, moment: { at: e.at, value: e.value ?? null, spans: [] } });
       if (e.cyl && e.type === 'cht_high') mark(`cht_max${e.cyl}`, r.id);
     }
   }
@@ -109,7 +118,8 @@ function analyze(runs, acks = {}) {
         key: `outlier:${m.key}:${first.p.r.id}`,
         kind: 'outlier', severity: worst.z >= 5 ? 'warning' : 'caution',
         title: `${m.label} ${g.length === 1 ? 'was' : 'has been'} ${fmtAbs(last.p.v, m.unit)} ${when} — ${fmt(first.diff, m.unit)} from its usual ${fmtAbs(first.med, m.unit)}`,
-        detail: hint(m, Math.sign(first.diff)), log_id: last.p.r.id, at: last.p.r.started_at, metric: m.key,
+        detail: hint(m, Math.sign(first.diff)), log_id: last.p.r.id, at: last.p.r.started_at, metric: m.key, cyl: m.cyl ?? null,
+        moment: momentOf(last.p.r, m.key, Math.sign(first.diff)),
       });
       g.forEach(h => mark(m.key, h.p.r.id));
     }
@@ -127,7 +137,8 @@ function analyze(runs, acks = {}) {
           key: `trend:${m.key}`, since: recent[0].r.started_at,
           kind: 'trend', severity: Math.abs(shift) >= m.trendDelta * 2 ? 'warning' : 'caution',
           title: `${m.label} has shifted ${fmt(shift, m.unit)} over the last ${RECENT} flights (now ${fmtAbs(rMed, m.unit)}, was ${fmtAbs(bMed, m.unit)})`,
-          detail: hint(m, Math.sign(shift)), log_id: recent[recent.length - 1].r.id, at: recent[recent.length - 1].r.started_at, metric: m.key,
+          detail: hint(m, Math.sign(shift)), log_id: recent[recent.length - 1].r.id, at: recent[recent.length - 1].r.started_at, metric: m.key, cyl: m.cyl ?? null,
+          moment: momentOf(recent[recent.length - 1].r, m.key, Math.sign(shift)), // on the latest flight
         });
         recent.forEach(p => mark(m.key, p.r.id));
       }
@@ -171,7 +182,21 @@ async function loadAnalysis(partnershipId, limit) {
     `SELECT a.finding_key, a.note, a.acked_at, u.name AS acked_by_name
      FROM engine_finding_acks a LEFT JOIN users u ON u.id = a.acked_by WHERE a.partnership_id = $1`, [partnershipId]);
   const acks = Object.fromEntries(ackRows.map(r => [r.finding_key, { note: r.note, acked_at: r.acked_at, acked_by_name: r.acked_by_name }]));
-  return { runs, ...analyze(runs, acks) };
+  const result = analyze(runs, acks);
+  const byId = new Map(runs.map(r => [r.id, r]));
+  const withWhen = (f) => ({ ...f, when: whenLabel(f, byId.get(f.log_id)) });
+  return { runs, ...result, findings: result.findings.map(withWhen), addressed: result.addressed.map(withWhen) };
+}
+
+// "at 5:32 PM, 26 min after takeoff" for a finding's moment (time of day on the run's clock).
+function whenLabel(f, run) {
+  if (!f.moment?.at || !run) return null;
+  const at = new Date(f.moment.at);
+  const clock = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: process.env.APP_TIMEZONE || 'America/New_York' });
+  const ref = run.takeoff_at && at >= new Date(run.takeoff_at) ? ['takeoff', run.takeoff_at] : run.engine_on_at ? ['engine start', run.engine_on_at] : null;
+  const mins = ref ? Math.round((at - new Date(ref[1])) / 60000) : null;
+  const lead = f.kind === 'trend' ? 'On the latest flight, most pronounced' : f.kind === 'outlier' ? 'Most pronounced' : 'Started';
+  return `${lead} at ${clock}${mins != null && mins >= 0 ? `, ${mins} min after ${ref[0]}` : ''}`;
 }
 
 // Re-parse stored logs from an older parser version (new stats/events), from the original CSVs.

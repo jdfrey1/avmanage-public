@@ -101,20 +101,20 @@ export function Flights() {
           </div>
         </div>
 
-        {/* Pilot filter tabs */}
-        {pilots.length > 1 && (
-          <div className="mt-3 flex gap-2">
-            <FilterTab active={filter === 'all'} onClick={() => setFilter('all')}>All</FilterTab>
-            {pilots.map(([id, name]) => (
-              <FilterTab key={id} active={filter === id} onClick={() => setFilter(id)}>
-                {name.split(' ')[0]}
-              </FilterTab>
-            ))}
-          </div>
-        )}
-
-        {/* Sort controls */}
-        <div className="mt-2 flex items-center gap-1.5">
+        {/* Pilot filter and sort, one row (wraps on phones) */}
+        <div className="mt-3 flex flex-wrap items-center gap-x-1.5 gap-y-2">
+          {pilots.length > 1 && (
+            <>
+              <FilterTab active={filter === 'all'} onClick={() => setFilter('all')}>All</FilterTab>
+              {pilots.map(([id, name]) => (
+                <FilterTab key={id} active={filter === id} onClick={() => setFilter(id)}>
+                  {name.split(' ')[0]}
+                </FilterTab>
+              ))}
+              <span className="mx-1 h-5 w-px bg-border" aria-hidden />
+            </>
+          )}
+          <span className="text-xs text-muted-foreground">Sort</span>
           {(['date', 'pilot', 'route', 'notes'] as const).map(s => (
             <FilterTab key={s} active={sortBy === s} onClick={() => setSortBy(s)}>
               {s.charAt(0).toUpperCase() + s.slice(1)}
@@ -128,9 +128,9 @@ export function Flights() {
           </button>
         </div>
 
-        {/* Search / filter inputs */}
-        <div className="mt-2 space-y-2">
-          <div className="relative">
+        {/* Search / filter inputs: one row on tablets, stacked on phones */}
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="relative sm:flex-1">
             <Input
               type="text"
               placeholder="Search route, notes, pilot…"
@@ -148,20 +148,21 @@ export function Flights() {
             )}
           </div>
           <div className="flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">From</span>
             <Input
               type="date"
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
-              className="h-8 flex-1 text-sm"
-              placeholder="From"
+              className="h-8 min-w-0 flex-1 text-sm sm:w-36 sm:flex-none"
+              aria-label="From date"
             />
-            <span className="text-xs text-muted-foreground">–</span>
+            <span className="text-xs text-muted-foreground">to</span>
             <Input
               type="date"
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
-              className="h-8 flex-1 text-sm"
-              placeholder="To"
+              className="h-8 min-w-0 flex-1 text-sm sm:w-36 sm:flex-none"
+              aria-label="To date"
             />
             {hasActiveFilter && (
               <button
@@ -178,7 +179,6 @@ export function Flights() {
         {filteredFlights.length > 0 && !loading && (
           <p className="mt-2 text-xs text-muted-foreground">
             {filteredFlights.length} flights · {totalFlight.toFixed(1)} Flight hrs · {totalHobbs.toFixed(1)} Hobbs hrs
-            {totalFlight > 0 && ` · ${totalFlight.toFixed(1)} Flight hrs`}
             {oilAddedTotal > 0 && ` · Oil ${oilAddedTotal.toFixed(1)} qt (${(oilAddedTotal / oilHours).toFixed(2)} qt/hr)`}
             {fuelAddedTotal > 0 && ` · Fuel added ${fuelAddedTotal.toFixed(0)} gal (${(fuelAddedTotal / fuelHours).toFixed(1)} gal/hr)`}
           </p>
@@ -257,39 +257,37 @@ function FlightCard({ flight: f, onChange }: { flight: Flight; onChange: () => v
         onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(o => !o) } }}
       >
         <DateTile date={f.flight_date} />
-        <div className="min-w-0 flex-1 sm:flex sm:items-start sm:gap-4">
-          <div className="shrink-0 space-y-0.5">
-            <p className="tabular-nums text-sm">
-              {hobbsTime && (
-                <>
-                  <span className="whitespace-nowrap font-semibold">{hobbsTime} Flight hrs</span>
-                  {' '}<span className="hidden text-muted-foreground sm:inline">({parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)})</span>
-                  {' '}<span className="mx-1 text-muted-foreground">·</span>{' '}
-                </>
-              )}
-              <span className="whitespace-nowrap"><span className={hobbsTime ? '' : 'font-semibold'}>{tachTime} Hobbs hrs</span>{f.ocr_source_image_key && <Camera className="ml-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground" />}</span>
-              {' '}<span className="hidden text-muted-foreground sm:inline">({parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)})</span>
-            </p>
-            {f.route && <p className="text-xs font-medium text-foreground/70">{f.route}</p>}
-          </div>
-          {f.notes && (
-            <p className={cn('mt-1 min-w-0 flex-1 text-sm text-muted-foreground sm:mt-0', open ? 'hidden sm:block sm:whitespace-pre-wrap' : 'line-clamp-1 sm:line-clamp-2')}>
-              {f.notes}
+        {/* Times, route and a one-line note stacked full width; meter readings and the full
+            note are in the expanded section so nothing is squeezed at tablet widths. */}
+        <div className="min-w-0 flex-1 space-y-0.5">
+          <p className="tabular-nums text-sm">
+            {hobbsTime && (
+              <>
+                <span className="whitespace-nowrap font-semibold">{hobbsTime} Flight hrs</span>
+                {' '}<span className="mx-0.5 text-muted-foreground">·</span>{' '}
+              </>
+            )}
+            <span className="whitespace-nowrap"><span className={hobbsTime ? '' : 'font-semibold'}>{tachTime} Hobbs hrs</span>{f.ocr_source_image_key && <Camera className="ml-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground" />}</span>
+          </p>
+          {(f.route || f.exclude_from_allotment) && (
+            <p className="text-xs">
+              {f.route && <span className="font-medium text-foreground/70">{f.route}</span>}
+              {f.exclude_from_allotment && <span className="text-amber-700 dark:text-amber-400">{f.route ? ' · ' : ''}Not counted toward allotment</span>}
             </p>
           )}
+          {f.notes && !open && <p className="line-clamp-1 text-xs text-muted-foreground">{f.notes}</p>}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
             title="Edit flight"
             aria-label="Edit flight"
-            className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
             onClick={e => { e.stopPropagation(); navigate(`/flights/${f.id}/edit`) }}
           >
             <Pencil className="h-4 w-4" />
           </button>
-          {f.exclude_from_allotment && <Badge variant="outline">Excluded</Badge>}
-          <Badge className={colorOf(f.pilot_id).pill}>
+          <Badge className={cn('max-w-[9rem] truncate', colorOf(f.pilot_id).pill)}>
             {f.other_pilot ? `${f.other_pilot} → ${f.member_name.split(' ')[0]}` : f.pilot_name.split(' ')[0]}
           </Badge>
           <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', open && 'rotate-180')} />
@@ -298,9 +296,9 @@ function FlightCard({ flight: f, onChange }: { flight: Flight; onChange: () => v
 
       {open && (
         <div className="space-y-2 border-t px-3 pb-3 pt-2">
-          <div className="space-y-1 sm:hidden">
+          <div className="space-y-1">
             <p className="tabular-nums text-xs text-muted-foreground">
-              {hobbsTime && <>Flight {parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)} · </>}
+              {hobbsTime && <>Flight meter {parseFloat(f.hobbs_start!).toFixed(1)} → {parseFloat(f.hobbs_end!).toFixed(1)} · </>}
               Hobbs {parseFloat(f.tach_start).toFixed(1)} → {parseFloat(f.tach_end).toFixed(1)}
             </p>
             {f.notes && <p className="whitespace-pre-wrap text-sm">{f.notes}</p>}

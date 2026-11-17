@@ -108,7 +108,7 @@ async function insightsSection(ctx) {
       return {
         key: `ins:${f.key}`, label: `Insight: ${f.title}`, notable: true,
         html: `<strong style="color:${f.severity === 'warning' ? '#b91c1c' : '#b45309'}">${f.severity === 'warning' ? 'Warning' : 'Caution'}</strong> · ${esc(f.title)}
-          ${flight ? `<br><span style="color:#666">${esc(flight)}${f.detail ? ` — ${esc(f.detail)}` : ''}</span>` : ''}`,
+          ${flight ? `<br><span style="color:#666">${esc(flight)}${f.when ? ` · ${esc(f.when)}` : ''}${f.detail ? ` — ${esc(f.detail)}` : ''}</span>` : ''}`,
       };
     }),
     empty: 'No open insights.',

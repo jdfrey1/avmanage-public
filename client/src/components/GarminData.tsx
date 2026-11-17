@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Globe, Upload } from 'lucide-react'
-import { api, type Flight, type GarminLog, type GarminSeries, type GarminUploadResult } from '@/lib/api'
+import { api, type EngineFinding, type Flight, type GarminLog, type GarminSeries, type GarminUploadResult } from '@/lib/api'
 import { Select } from '@/components/ui/select'
 import { LineChart, SERIES_COLORS, timeTicks, type LineSeries } from '@/components/LineChart'
 import { Modal } from '@/components/Modal'
@@ -25,13 +25,39 @@ export function garminSummary(logs: GarminLog[]) {
 
 // Garmin data in a pop-up: map plus charts, all sharing one cursor (touch/hover a chart and the
 // map marker and every chart follow).
-export function GarminModal({ log, onClose }: { log: GarminLog; onClose: () => void }) {
+// The chart a finding's metric belongs on.
+function chartFor(metric: string) {
+  if (/^(cht|shock)/.test(metric)) return 'CHT'
+  if (/^egt/.test(metric)) return 'EGT'
+  if (/^oil/.test(metric)) return 'Oil'
+  if (metric === 'ff_per_pwr') return 'Manifold pressure / fuel flow'
+  if (/^(volts|battery)/.test(metric)) return 'Electrical'
+  return null
+}
+
+// focus: a finding from Data Log Insights. Its moment is marked on every chart (red line), the
+// cruise stretches it was averaged over are shaded, and its chart is outlined and scrolled to.
+export function GarminModal({ log, onClose, focus }: { log: GarminLog; onClose: () => void; focus?: EngineFinding | null }) {
   const [s, setS] = useState<GarminSeries | null>(null)
   const [err, setErr] = useState('')
   const [hover, setHover] = useState<number | null>(null)
+  const focusRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     api.get<GarminSeries>(`/garmin/${log.id}/series`).then(setS).catch(() => setErr('Could not load the data.'))
   }, [log.id])
+  // Index of the sample nearest the finding's moment; the map marker and readouts start there.
+  const focusIdx = useMemo(() => {
+    if (!s || !focus?.moment?.at) return null
+    const sec = (new Date(focus.moment.at).getTime() - s.t0) / 1000
+    let best = 0
+    s.t.forEach((t, i) => { if (Math.abs(t - sec) < Math.abs(s.t[best] - sec)) best = i })
+    return best
+  }, [s, focus])
+  useEffect(() => {
+    if (focusIdx == null) return
+    setHover(focusIdx)
+    setTimeout(() => focusRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150)
+  }, [focusIdx])
   const points = useMemo(() => (s?.t ?? []).map((_, i) => {
     const lat = s?.lat?.[i], lon = s?.lon?.[i]
     return lat != null && lon != null ? { lat, lon } : null
@@ -48,15 +74,47 @@ export function GarminModal({ log, onClose }: { log: GarminLog; onClose: () => v
   const xLabel = (sec: number) => clock(s.t0 + sec * 1000)
   const ticks = timeTicks(x, s.t0)
   const col = (k: string) => s[k] ?? []
+  // The finding's cylinder (or the oil temp / pressure line) gets a circle at the marked moment.
+  const focusChart = focus ? chartFor(focus.metric) : null
+  const circled = (series: string, chart?: string) => {
+    if (focusIdx == null || !focus) return undefined
+    const m = focus.metric
+    if (focus.cyl && series === `#${focus.cyl}`) return chart === focusChart ? [focusIdx] : undefined
+    if (/^oil_?t/.test(m) && series === 'Temp °F') return [focusIdx]
+    if (/^oil_?p/.test(m) && series === 'Press psi') return [focusIdx]
+    if (m === 'ff_per_pwr' && series === 'FF gph') return [focusIdx]
+    if (/^volts/.test(m) && series === 'Volts') return [focusIdx]
+    if (/^battery/.test(m) && series === 'Amps') return [focusIdx]
+    return undefined
+  }
   const cyl = (prefix: 'cht' | 'egt') => [1, 2, 3, 4, 5, 6]
     .filter(c => s[`${prefix}${c}`])
-    .map((c, i): LineSeries => ({ label: `#${c}`, values: col(`${prefix}${c}`), color: SERIES_COLORS[i] }))
+    .map((c, i): LineSeries => ({ label: `#${c}`, values: col(`${prefix}${c}`), color: SERIES_COLORS[i], marks: circled(`#${c}`, prefix.toUpperCase()) }))
+  const line = (label: string, key: string, color: string): LineSeries => ({ label, values: col(key), color, marks: circled(label) })
   const fuel = col('fql').map((l, i) => (l == null && col('fqr')[i] == null ? null : (l ?? 0) + (col('fqr')[i] ?? 0)))
-  const common = { x, xLabel, xTicks: ticks, hover, onHover: setHover }
+  const sec = (iso: string) => (new Date(iso).getTime() - s.t0) / 1000
+  const markers = focusIdx != null ? [{ x: x[focusIdx], label: focus?.when ?? 'Finding' }] : undefined
+  const bands = focus?.moment?.spans?.map(([a, b]): [number, number] => [sec(a), sec(b)])
+  const common = { x, xLabel, xTicks: ticks, hover, onHover: setHover, markers, bands }
+  // Wraps the finding's chart: outlined, and scrolled into view when the pop-up opens.
+  const slot = (name: string) => focusChart === name
+    ? { ref: focusRef, className: 'rounded-md p-1.5 ring-2 ring-red-500/70' }
+    : {}
 
   return (
     <Modal title={title} subtitle={subtitle} onClose={onClose}>
       <div className="space-y-4">
+        {focus && (
+          <div className="rounded-md border border-red-500/40 bg-red-500/5 p-2.5 text-sm">
+            <p>{focus.title}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {focus.when ?? 'No time recorded for this finding.'}
+              {focusIdx != null && <> · marked on the charts with a <span className="font-medium text-red-500">red dashed line</span></>}
+              {bands?.length ? <> · the <span className="font-medium text-sky-600 dark:text-sky-400">shaded areas</span> are the level cruise used for the comparison</> : null}
+              {focusIdx != null && <> · <button type="button" onClick={() => setHover(focusIdx)} className="text-primary hover:underline">jump to it</button></>}
+            </p>
+          </div>
+        )}
         {points.some(Boolean) && <TrackMap points={points} hover={hover} />}
         <div className="grid gap-4 md:grid-cols-2">
           <LineChart title="Altitude" unit="ft MSL" {...common} series={[{ label: 'MSL', values: col('alt'), color: SERIES_COLORS[3] }]} />
@@ -66,22 +124,28 @@ export function GarminModal({ log, onClose }: { log: GarminLog; onClose: () => v
             { label: 'GS', values: col('gs'), color: SERIES_COLORS[2] },
           ]} />
           <LineChart title="RPM" {...common} series={[{ label: 'RPM', values: col('rpm'), color: SERIES_COLORS[0] }]} />
-          <LineChart title="Manifold pressure / fuel flow" digits={1} {...common} series={[
-            { label: 'MAP inHg', values: col('map'), color: SERIES_COLORS[3] },
-            { label: 'FF gph', values: col('ff'), color: SERIES_COLORS[1] },
-          ]} />
-          <LineChart title="CHT" unit="°F" {...common} series={cyl('cht')} />
-          <LineChart title="EGT" unit="°F" {...common} series={cyl('egt')} />
-          <LineChart title="Oil" {...common} series={[
-            { label: 'Temp °F', values: col('oilt'), color: SERIES_COLORS[0] },
-            { label: 'Press psi', values: col('oilp'), color: SERIES_COLORS[3] },
-          ]} />
+          <div {...slot("Manifold pressure / fuel flow")}>
+            <LineChart title="Manifold pressure / fuel flow" digits={1} {...common} series={[
+              line('MAP inHg', 'map', SERIES_COLORS[3]),
+              line('FF gph', 'ff', SERIES_COLORS[1]),
+            ]} />
+          </div>
+          <div {...slot("CHT")}><LineChart title="CHT" unit="°F" {...common} series={cyl('cht')} /></div>
+          <div {...slot("EGT")}><LineChart title="EGT" unit="°F" {...common} series={cyl('egt')} /></div>
+          <div {...slot("Oil")}>
+            <LineChart title="Oil" {...common} series={[
+              line('Temp °F', 'oilt', SERIES_COLORS[0]),
+              line('Press psi', 'oilp', SERIES_COLORS[3]),
+            ]} />
+          </div>
           <LineChart title="Fuel on board" unit="gal" digits={1} {...common} series={[{ label: 'Total', values: fuel, color: SERIES_COLORS[2] }]} />
           {s.volt && (
-            <LineChart title="Electrical" digits={1} {...common} series={[
-              { label: 'Volts', values: col('volt'), color: SERIES_COLORS[1] },
-              { label: 'Amps', values: col('amp'), color: SERIES_COLORS[5] },
-            ]} />
+            <div {...slot("Electrical")}>
+              <LineChart title="Electrical" digits={1} {...common} series={[
+                line('Volts', 'volt', SERIES_COLORS[1]),
+                line('Amps', 'amp', SERIES_COLORS[5]),
+              ]} />
+            </div>
           )}
           <LineChart title="Vertical speed" unit="fpm" {...common} series={[{ label: 'VS', values: col('vs'), color: SERIES_COLORS[4] }]} />
         </div>
@@ -277,6 +341,19 @@ export function UnmatchedGarmin({ flights, reloadKey, onChange }: { flights: Fli
 
   if (!items) return null
   const day = (iso: string) => new Date(iso).toLocaleDateString('en-CA')
+  // Nothing to act on: one compact line that keeps the upload action and any upload messages.
+  if (items.length === 0) return (
+    <div className="flex h-full flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border bg-card px-3 py-2 text-xs">
+      <span className="text-muted-foreground"><span className="font-medium text-foreground">Garmin data</span> · all matched</span>
+      {msg?.text && <span className="text-emerald-700 dark:text-emerald-400">{msg.text}</span>}
+      {msg?.errors.map(e => <span key={e} className="text-destructive">{e}</span>)}
+      {error && <span className="text-destructive">{error}</span>}
+      <button type="button" onClick={() => inputRef.current?.click()} disabled={busy} className="ml-auto shrink-0 text-primary hover:underline disabled:opacity-50">
+        {busy ? 'Uploading…' : 'Upload Garmin data'}
+      </button>
+      <input ref={inputRef} type="file" accept=".csv,text/csv" multiple className="hidden" onChange={pick} />
+    </div>
+  )
   return (
     <div className="h-full rounded-lg border bg-card p-3 text-xs">
       <div className="flex items-center justify-between gap-2">

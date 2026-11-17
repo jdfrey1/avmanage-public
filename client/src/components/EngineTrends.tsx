@@ -19,7 +19,7 @@ const KIND = {
 const shortDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
 function FindingRow({ f, run, open, onChange }: {
-  f: EngineFinding; run?: GarminTrendPoint; open: (r: GarminTrendPoint) => void; onChange: () => void
+  f: EngineFinding; run?: GarminTrendPoint; open: (r: GarminTrendPoint, f?: EngineFinding) => void; onChange: () => void
 }) {
   const K = KIND[f.kind]
   const [acking, setAcking] = useState(false)
@@ -36,10 +36,11 @@ function FindingRow({ f, run, open, onChange }: {
         <K.icon className={cn('mt-0.5 h-4 w-4 shrink-0', addressed ? 'text-muted-foreground' : f.severity === 'warning' ? 'text-destructive' : 'text-amber-500')} />
         <div className="min-w-0 flex-1">
           <p className={cn('text-sm', addressed && 'text-muted-foreground')}>{f.title}</p>
+          {f.when && <p className={cn('text-xs', addressed ? 'text-muted-foreground' : 'text-foreground/80')}>{f.when}</p>}
           {f.detail && !addressed && <p className="text-xs text-muted-foreground">{f.detail}</p>}
           <p className="mt-0.5 text-[11px] text-muted-foreground">
             {K.label}{run && <> · {shortDate(run.started_at)} {run.origin ?? '?'}→{run.destination ?? '?'}{run.pilot_name && ` · ${run.pilot_name.split(' ')[0]}`} · </>}
-            {run && <button type="button" onClick={() => open(run)} className="text-primary hover:underline">view flight data</button>}
+            {run && <button type="button" onClick={() => open(run, f)} className="text-primary hover:underline">{f.moment ? 'show on chart' : 'view flight data'}</button>}
           </p>
           {addressed && (
             <p className="mt-1 text-xs">
@@ -76,7 +77,7 @@ function FindingRow({ f, run, open, onChange }: {
   )
 }
 
-function Findings({ data, open, onChange }: { data: EngineTrendsResponse; open: (r: GarminTrendPoint) => void; onChange: () => void }) {
+function Findings({ data, open, onChange }: { data: EngineTrendsResponse; open: (r: GarminTrendPoint, f?: EngineFinding) => void; onChange: () => void }) {
   const { findings, addressed, history, runs } = data
   const [showAddressed, setShowAddressed] = useState(false)
   const byId = new Map(runs.map(r => [r.id, r]))
@@ -126,7 +127,8 @@ function Findings({ data, open, onChange }: { data: EngineTrendsResponse; open: 
 export function EngineTrends() {
   const [data, setData] = useState<EngineTrendsResponse | null>(null)
   const [error, setError] = useState('')
-  const [modal, setModal] = useState<GarminTrendPoint | null>(null)
+  const [modal, setModal] = useState<{ run: GarminTrendPoint; focus?: EngineFinding } | null>(null)
+  const openRun = (run: GarminTrendPoint, focus?: EngineFinding) => setModal({ run, focus })
   const [hover, setHover] = useState<number | null>(null)
   const load = () => { api.get<EngineTrendsResponse>('/garmin/trends?limit=200').then(setData).catch(() => setError('Could not load engine data')) }
   useEffect(load, [])
@@ -164,7 +166,7 @@ export function EngineTrends() {
   return (
     <div className="space-y-5 p-4">
       <p className="text-sm text-muted-foreground">{runs.length} engine run{runs.length > 1 ? 's' : ''}, {totalHrs.toFixed(1)} engine hrs of data.</p>
-      <Findings data={data} open={setModal} onChange={load} />
+      <Findings data={data} open={openRun} onChange={load} />
 
       {runs.length < 2 ? (
         <p className="text-sm text-muted-foreground">Trend charts appear once there are at least two engine runs.</p>
@@ -203,7 +205,7 @@ export function EngineTrends() {
           </thead>
           <tbody className="divide-y tabular-nums">
             {[...runs].reverse().map(r => (
-              <tr key={r.id} onClick={() => setModal(r)} className={cn('cursor-pointer hover:bg-accent/40', flagged.has(r.id) && 'bg-amber-500/10')}>
+              <tr key={r.id} onClick={() => openRun(r)} className={cn('cursor-pointer hover:bg-accent/40', flagged.has(r.id) && 'bg-amber-500/10')}>
                 <td className="whitespace-nowrap px-2 py-1.5">
                   {flagged.has(r.id) && <AlertTriangle className="mr-1 inline h-3 w-3 text-amber-500" />}
                   {flaggedAddressed.has(r.id) && <span title="Finding addressed"><AlertTriangle className="mr-1 inline h-3 w-3 text-muted-foreground" /></span>}
@@ -219,7 +221,7 @@ export function EngineTrends() {
           </tbody>
         </table>
       </div>
-      {modal && <GarminModal log={modal} onClose={() => setModal(null)} />}
+      {modal && <GarminModal log={modal.run} focus={modal.focus} onClose={() => setModal(null)} />}
     </div>
   )
 }
