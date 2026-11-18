@@ -17,6 +17,7 @@ const FOLDER_NAMES = {
   foreflight: 'ForeFlight Imports',
   garminLogs: 'Garmin Data Logs',
   backups: 'Database Backups',
+  misc: 'Miscellaneous', // paperwork not specific to the aircraft (training records etc.)
 };
 
 // Folders nested inside one of the top-level folders above: key -> [name, parent key].

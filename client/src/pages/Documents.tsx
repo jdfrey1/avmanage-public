@@ -14,7 +14,7 @@ const REQUIRED_DOC_TYPES: { key: AircraftDocType; label: string; description: st
   { key: 'weight_and_balance', label: 'Weight & Balance Data', description: 'Current weight and balance calculations for this aircraft.' },
 ]
 
-const MISC_DOC_TYPE = { key: 'miscellaneous' as AircraftDocType, label: 'Miscellaneous', description: 'Lease agreement, insurance policy and binders, airport certificates of insurance, and other aircraft paperwork.' }
+const MISC_DOC_TYPE = { key: 'miscellaneous' as AircraftDocType, label: 'Miscellaneous', description: 'Lease agreement, insurance policy and binders, airport certificates of insurance, pilot training records, and other paperwork.' }
 
 const DOC_TYPE_LABELS: Record<AircraftDocType, string> = Object.fromEntries(
   [...REQUIRED_DOC_TYPES, MISC_DOC_TYPE].map(t => [t.key, t.label])

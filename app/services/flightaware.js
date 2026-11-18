@@ -142,46 +142,102 @@ async function pollEmails(days = 3) {
   return { checked: ids.length, added: fresh.length };
 }
 
-// Attach each complete, unattached FlightAware record to the logged flight it describes.
+const stripCode = (c) => (c || '').toUpperCase().replace(/^K(?=[A-Z0-9]{3}$)/, '');
+const legHours = (ff) => (ff.en_route_min ?? Math.round((ff.on_time - ff.off_time) / 60000)) / 60;
+const TAXI_HRS = 0.1; // meter time per leg beyond wheels-off to wheels-on
+
+// How badly a run of legs fits a logged flight: meter-time mismatch, plus a penalty when the
+// route names airports and none of the legs touch them. Infinity if the leg was detached from it.
+function groupCost(flight, legs) {
+  if (legs.some(l => l.detached_flight_id === flight.id)) return Infinity;
+  const hrs = legs.reduce((t, l) => t + legHours(l) + TAXI_HRS, 0);
+  const diff = flight.flight_time == null ? 0.5 : Math.abs(flight.flight_time - hrs);
+  const tokens = (flight.route || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean).map(stripCode);
+  const codes = legs.flatMap(l => [stripCode(l.origin), stripCode(l.destination)]).filter(Boolean);
+  const named = tokens.filter(t => /^[A-Z0-9]{3,4}$/.test(t) && /\d|^[A-Z]{3}$/.test(t));
+  const routeHit = codes.some(c => tokens.includes(c));
+  return { diff, routeHit, cost: diff + (named.length && !routeHit ? 0.3 : 0) };
+}
+
+// Split one day's legs (in time order) into consecutive runs, one per flight (in meter order),
+// minimising the total mismatch. A flight may get no legs (cost = its whole flight time).
+function assignDay(flights, legs) {
+  const F = flights.length, L = legs.length;
+  const best = Array.from({ length: F + 1 }, () => Array(L + 1).fill(Infinity));
+  const from = Array.from({ length: F + 1 }, () => Array(L + 1).fill(-1));
+  best[0][0] = 0;
+  for (let j = 1; j <= F; j++) {
+    for (let i = 0; i <= L; i++) {
+      for (let k = 0; k <= i; k++) {
+        if (best[j - 1][k] === Infinity) continue;
+        const g = k === i ? { cost: flights[j - 1].flight_time ?? 1 } : groupCost(flights[j - 1], legs.slice(k, i));
+        const c = g === Infinity ? Infinity : best[j - 1][k] + g.cost;
+        if (c < best[j][i]) { best[j][i] = c; from[j][i] = k; }
+      }
+    }
+  }
+  // Legs that fit no flight are left at the end; take the best i with a leftover penalty.
+  let end = L, score = Infinity;
+  for (let i = 0; i <= L; i++) {
+    const s = best[F][i] + (L - i) * 0.6;
+    if (s < score) { score = s; end = i; }
+  }
+  const out = [];
+  for (let j = F, i = end; j > 0; j--) {
+    const k = from[j][i];
+    if (k < i) out.push({ flight: flights[j - 1], legs: legs.slice(k, i) });
+    i = k;
+  }
+  return out;
+}
+
+// Attach complete, unattached FlightAware legs to the logged flights they describe. Each local
+// day is matched as a whole: that day's legs (by takeoff time) are split across the day's flights
+// without legs yet (by meter start), so each flight gets the run of legs whose airborne time best
+// fits its meter time. A leftover leg can still join an earlier leg's flight as a later leg of the
+// same outing (departs where that leg landed, within 4 hours).
 async function matchFlights() {
   const { rows: pending } = await pool.query(
     `SELECT id, partnership_id, origin, destination, off_time, on_time, en_route_min, detached_flight_id,
             (off_time AT TIME ZONE '${LOCAL_TZ}')::date::text AS local_date
      FROM flightaware_flights WHERE flight_id IS NULL AND NOT ignored AND off_time IS NOT NULL AND on_time IS NOT NULL
      ORDER BY off_time`);
-  let matched = 0;
+  const days = new Map();
   for (const ff of pending) {
-    // A later leg of the same outing (departs where an attached leg landed, within 4 hours of
-    // landing) joins that flight's tracks.
-    const { rows: [cont] } = await pool.query(
-      `SELECT x.flight_id FROM flightaware_flights x JOIN flights f ON f.id = x.flight_id
-       WHERE f.partnership_id = $1 AND f.id IS DISTINCT FROM $2 AND x.id <> $3
-         AND upper(x.destination) = upper($4) AND x.on_time <= $5 AND x.on_time > $5::timestamptz - interval '4 hours'
-       ORDER BY x.on_time DESC LIMIT 1`,
-      [ff.partnership_id, ff.detached_flight_id, ff.id, ff.origin || '', ff.off_time]);
-    if (cont) {
-      await pool.query('UPDATE flightaware_flights SET flight_id = $2 WHERE id = $1 AND flight_id IS NULL', [ff.id, cont.flight_id]);
-      matched++;
-      continue;
-    }
-    const { rows: cands } = await pool.query(
+    const k = `${ff.partnership_id}|${ff.local_date}`;
+    if (!days.has(k)) days.set(k, []);
+    days.get(k).push(ff);
+  }
+  let matched = 0;
+  const attach = async (legId, flightId) => {
+    const r = await pool.query('UPDATE flightaware_flights SET flight_id = $2 WHERE id = $1 AND flight_id IS NULL', [legId, flightId]);
+    matched += r.rowCount;
+  };
+  for (const legs of days.values()) {
+    const { partnership_id, local_date } = legs[0];
+    const { rows: flights } = await pool.query(
       `SELECT f.id, f.route, f.flight_time::float AS flight_time FROM flights f
-       WHERE f.partnership_id = $1 AND f.flight_date = $2 AND f.id IS DISTINCT FROM $3
-         AND NOT EXISTS (SELECT 1 FROM flightaware_flights x WHERE x.flight_id = f.id)`,
-      [ff.partnership_id, ff.local_date, ff.detached_flight_id]);
-    if (!cands.length) continue;
-    const enr = (ff.en_route_min ?? Math.round((ff.on_time - ff.off_time) / 60000)) / 60;
-    const strip = (c) => (c || '').toUpperCase().replace(/^K(?=[A-Z0-9]{3}$)/, '');
-    const codes = [strip(ff.origin), strip(ff.destination)].filter(Boolean);
-    const scored = cands.map(c => {
-      const tokens = (c.route || '').toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean).map(strip);
-      return { id: c.id, routeHit: codes.some(code => tokens.includes(code)),
-               diff: c.flight_time == null ? null : Math.abs(c.flight_time - enr) };
-    }).filter(c => c.routeHit || (c.diff != null && c.diff <= 0.5) || cands.length === 1)
-      .sort((a, b) => (b.routeHit - a.routeHit) || ((a.diff ?? 9) - (b.diff ?? 9)));
-    if (!scored.length) continue;
-    await pool.query('UPDATE flightaware_flights SET flight_id = $2 WHERE id = $1 AND flight_id IS NULL', [ff.id, scored[0].id]);
-    matched++;
+       WHERE f.partnership_id = $1 AND f.flight_date = $2
+         AND NOT EXISTS (SELECT 1 FROM flightaware_flights x WHERE x.flight_id = f.id)
+       ORDER BY COALESCE(f.hobbs_start, f.tach_start), f.created_at`,
+      [partnership_id, local_date]);
+    const used = new Set();
+    for (const { flight, legs: group } of assignDay(flights, legs)) {
+      const g = groupCost(flight, group);
+      // Accept a plausible fit; a lone flight that day takes whatever is left.
+      if (g !== Infinity && (g.routeHit || g.diff <= 0.5 || flights.length === 1)) {
+        for (const l of group) { await attach(l.id, flight.id); used.add(l.id); }
+      }
+    }
+    for (const ff of legs.filter(l => !used.has(l.id))) {
+      const { rows: [cont] } = await pool.query(
+        `SELECT x.flight_id FROM flightaware_flights x
+         WHERE x.partnership_id = $1 AND x.flight_id IS NOT NULL AND x.flight_id IS DISTINCT FROM $2 AND x.id <> $3
+           AND upper(x.destination) = upper($4) AND x.on_time <= $5 AND x.on_time > $5::timestamptz - interval '4 hours'
+         ORDER BY x.on_time DESC LIMIT 1`,
+        [partnership_id, ff.detached_flight_id, ff.id, ff.origin || '', ff.off_time]);
+      if (cont) await attach(ff.id, cont.flight_id);
+    }
   }
   return matched;
 }

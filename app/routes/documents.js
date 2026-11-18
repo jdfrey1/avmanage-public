@@ -99,7 +99,11 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         // Some titles are entered with the extension already included (e.g. "Plate.JPG") —
         // don't double it up into "Plate.JPG.jpg".
         const driveName = doc.title.toLowerCase().endsWith(`.${ext}`) ? doc.title : `${doc.title}.${ext}`;
-        const driveFileId = await googleDrive.uploadFile('documents', {
+        // The Miscellaneous section has its own Drive folder (it holds non-aircraft paperwork
+        // such as pilot training records); everything else goes to Aircraft Documents.
+        const folderKey = doc_type === 'miscellaneous' ? 'misc' : 'documents';
+        if (folderKey === 'misc') await googleDrive.ensureFolderStructure(); // adds the folder on older installs
+        const driveFileId = await googleDrive.uploadFile(folderKey, {
           name: driveName, mimeType: mime, buffer: req.file.buffer,
         });
         await pool.query('UPDATE documents SET drive_file_id = $1 WHERE id = $2', [driveFileId, doc.id]);
