@@ -438,6 +438,15 @@ export function Dashboard() {
                     : `Expired ${Math.abs(currency.bfr.daysUntilExpiry ?? 0)}d ago`
                   : 'No BFR date set — update in Settings'}
               />
+              <CurrencyRow
+                label="Icing course"
+                current={currency.icing?.current ?? false}
+                detail={currency.icing?.expiresDate
+                  ? currency.icing.current
+                    ? `${currency.icing.daysUntilExpiry}d left · ${expiryDate(currency.icing.expiresDate, true)}`
+                    : `Expired ${Math.abs(currency.icing.daysUntilExpiry ?? 0)}d ago`
+                  : 'No course date set — update in Settings'}
+              />
             </>
           )}
         </CardContent>

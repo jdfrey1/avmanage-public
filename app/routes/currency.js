@@ -161,5 +161,17 @@ router.patch('/bfr', async (req, res) => {
   }
 });
 
+// PATCH /api/currency/icing — save the date of the last Cirrus icing awareness course
+router.patch('/icing', async (req, res) => {
+  try {
+    const { icing_course_date } = req.body;
+    await pool.query('UPDATE users SET icing_course_date = $1 WHERE id = $2', [icing_course_date || null, req.session.userId]);
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('PATCH /currency/icing error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.importForeflightCsv = importForeflightCsv;
 module.exports = router;

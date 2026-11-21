@@ -4,6 +4,7 @@ import { api, type EngineFinding, type EngineTrendsResponse, type GarminTrendPoi
 import { LineChart, SERIES_COLORS, indexTicks, type LineSeries } from '@/components/LineChart'
 import { GarminModal } from '@/components/GarminData'
 import { cn } from '@/lib/utils'
+import { DateTile } from '@/components/DateTile'
 
 // Engine monitoring across Garmin data logs, one point per engine run (oldest → newest):
 // findings (limits, in-flight events, outliers vs. history, trend shifts) above the charts.
@@ -18,6 +19,30 @@ const KIND = {
 
 const shortDate = (iso: string) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 
+// The flight a finding came from (local flight date when it's linked to a logged flight).
+const findingDate = (f: EngineFinding, run?: GarminTrendPoint) => run?.flight_date ?? run?.started_at ?? f.at
+
+type SortBy = 'date' | 'severity' | 'type'
+const SEVERITY_RANK = { warning: 0, caution: 1, info: 2 } as const
+const KIND_RANK = { limit: 0, event: 1, outlier: 2, trend: 3 } as const
+const SORT_KEY = 'engine-findings-sort'
+
+function readSort(): { by: SortBy; order: 'desc' | 'asc' } {
+  try {
+    const v = JSON.parse(localStorage.getItem(SORT_KEY) || '{}')
+    return { by: ['date', 'severity', 'type'].includes(v.by) ? v.by : 'date', order: v.order === 'asc' ? 'asc' : 'desc' }
+  } catch { return { by: 'date', order: 'desc' } }
+}
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick}
+      className={cn('rounded-full px-3 py-1 text-xs transition-colors', active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground')}>
+      {children}
+    </button>
+  )
+}
+
 function FindingRow({ f, run, open, onChange }: {
   f: EngineFinding; run?: GarminTrendPoint; open: (r: GarminTrendPoint, f?: EngineFinding) => void; onChange: () => void
 }) {
@@ -27,26 +52,29 @@ function FindingRow({ f, run, open, onChange }: {
   const [busy, setBusy] = useState(false)
   async function post(path: string, body: object) {
     setBusy(true)
-    try { await api.post(path, body); onChange() } finally { setBusy(false) }
+    try { await api.post(path, body); setAcking(false); onChange() } finally { setBusy(false) }
   }
   const addressed = !!f.ack
   return (
     <li className="px-3 py-2">
       <div className="flex items-start gap-3">
-        <K.icon className={cn('mt-0.5 h-4 w-4 shrink-0', addressed ? 'text-muted-foreground' : f.severity === 'warning' ? 'text-destructive' : 'text-amber-500')} />
+        <DateTile date={findingDate(f, run)} />
         <div className="min-w-0 flex-1">
-          <p className={cn('text-sm', addressed && 'text-muted-foreground')}>{f.title}</p>
+          <p className={cn('text-sm', addressed && 'text-muted-foreground')}>
+            <K.icon className={cn('mr-1.5 inline h-4 w-4 -translate-y-px', addressed ? 'text-muted-foreground' : f.severity === 'warning' ? 'text-destructive' : 'text-amber-500')} />
+            {f.title}
+          </p>
           {f.when && <p className={cn('text-xs', addressed ? 'text-muted-foreground' : 'text-foreground/80')}>{f.when}</p>}
           {f.detail && !addressed && <p className="text-xs text-muted-foreground">{f.detail}</p>}
           <p className="mt-0.5 text-[11px] text-muted-foreground">
-            {K.label}{run && <> · {shortDate(run.started_at)} {run.origin ?? '?'}→{run.destination ?? '?'}{run.pilot_name && ` · ${run.pilot_name.split(' ')[0]}`} · </>}
+            {K.label}{run && <> · {run.origin ?? '?'}→{run.destination ?? '?'}{run.pilot_name && ` · ${run.pilot_name.split(' ')[0]}`} · </>}
             {run && <button type="button" onClick={() => open(run, f)} className="text-primary hover:underline">{f.moment ? 'show on chart' : 'view flight data'}</button>}
           </p>
           {addressed && (
             <p className="mt-1 text-xs">
               <CheckCircle2 className="mr-1 inline h-3 w-3 text-emerald-600" />
-              Addressed {shortDate(f.ack!.acked_at)}{f.ack!.acked_by_name && ` by ${f.ack!.acked_by_name.split(' ')[0]}`}
-              {f.ack!.note && <span className="text-muted-foreground"> — {f.ack!.note}</span>}
+              Reviewed {shortDate(f.ack!.acked_at)}{f.ack!.acked_by_name && ` by ${f.ack!.acked_by_name.split(' ')[0]}`}
+              {f.ack!.note && !acking && <span className="text-muted-foreground"> — {f.ack!.note}</span>}
             </p>
           )}
           {acking && (
@@ -55,23 +83,28 @@ function FindingRow({ f, run, open, onChange }: {
                 autoFocus
                 value={note}
                 onChange={e => setNote(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') post('/garmin/findings/ack', { key: f.key, note }) }}
-                placeholder="What was done? (optional)"
+                onKeyDown={e => { if (e.key === 'Enter') post('/garmin/findings/ack', { key: f.key, note, edit: addressed }) }}
+                placeholder="Review note (optional) — e.g. normal power change, fixed, will watch"
                 className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
               />
-              <button type="button" disabled={busy} onClick={() => post('/garmin/findings/ack', { key: f.key, note })} className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50">Save</button>
+              <button type="button" disabled={busy} onClick={() => post('/garmin/findings/ack', { key: f.key, note, edit: addressed })} className="rounded-md bg-primary px-2 py-1 text-xs text-primary-foreground disabled:opacity-50">{addressed ? 'Save' : 'Mark reviewed'}</button>
               <button type="button" onClick={() => setAcking(false)} className="rounded-md border px-2 py-1 text-xs">Cancel</button>
             </div>
           )}
         </div>
         {!acking && (
           addressed
-            ? <button type="button" disabled={busy} onClick={() => post('/garmin/findings/unack', { key: f.key })} className="shrink-0 text-xs text-muted-foreground hover:text-foreground hover:underline">Reopen</button>
-            : <button type="button" onClick={() => setAcking(true)} className="shrink-0 text-xs text-primary hover:underline">Mark addressed</button>
+            ? (
+              <div className="flex shrink-0 flex-col items-end gap-1">
+                <button type="button" onClick={() => { setNote(f.ack!.note ?? ''); setAcking(true) }} className="text-xs text-primary hover:underline">Edit</button>
+                <button type="button" disabled={busy} onClick={() => post('/garmin/findings/unack', { key: f.key })} className="text-xs text-muted-foreground hover:text-foreground hover:underline">Reopen</button>
+              </div>
+            )
+            : <button type="button" onClick={() => setAcking(true)} className="shrink-0 text-xs text-primary hover:underline">Mark reviewed</button>
         )}
       </div>
-      {f.kind === 'trend' && acking && (
-        <p className="ml-7 mt-1 text-[11px] text-muted-foreground">If the shift is still there after 5 more flights, it will come back.</p>
+      {f.kind === 'trend' && acking && !addressed && (
+        <p className="ml-[3.25rem] mt-1 text-[11px] text-muted-foreground">If the shift is still there after 5 more flights, it will come back.</p>
       )}
     </li>
   )
@@ -80,10 +113,38 @@ function FindingRow({ f, run, open, onChange }: {
 function Findings({ data, open, onChange }: { data: EngineTrendsResponse; open: (r: GarminTrendPoint, f?: EngineFinding) => void; onChange: () => void }) {
   const { findings, addressed, history, runs } = data
   const [showAddressed, setShowAddressed] = useState(false)
+  const [sort, setSortState] = useState(readSort)
+  const setSort = (next: Partial<typeof sort>) => setSortState(cur => {
+    const v = { ...cur, ...next }
+    try { localStorage.setItem(SORT_KEY, JSON.stringify(v)) } catch { /* private mode */ }
+    return v
+  })
   const byId = new Map(runs.map(r => [r.id, r]))
+  const time = (f: EngineFinding) => new Date(f.at || byId.get(f.log_id)?.started_at || 0).getTime()
+  // Date: newest/oldest flight first. Severity/type: grouped (worst first), newest first within a
+  // group unless the order is flipped.
+  const sorted = (list: EngineFinding[]) => [...list].sort((a, b) => {
+    const dir = sort.order === 'desc' ? -1 : 1
+    const group = sort.by === 'severity' ? SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+      : sort.by === 'type' ? KIND_RANK[a.kind] - KIND_RANK[b.kind] : 0
+    return group || dir * (time(a) - time(b))
+  })
+  const sortBar = (findings.length + addressed.length) > 1 && (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted-foreground">Sort</span>
+      {(['date', 'severity', 'type'] as const).map(s => (
+        <Pill key={s} active={sort.by === s} onClick={() => setSort({ by: s })}>{s.charAt(0).toUpperCase() + s.slice(1)}</Pill>
+      ))}
+      <button type="button" onClick={() => setSort({ order: sort.order === 'desc' ? 'asc' : 'desc' })}
+        className="ml-auto rounded-full border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground">
+        {sort.order === 'desc' ? '↓ Newest' : '↑ Oldest'}
+      </button>
+    </div>
+  )
   const warn = findings.filter(f => f.severity === 'warning').length
   return (
     <div className="space-y-2">
+      {sortBar}
       {findings.length === 0 ? (
         <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">
           <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
@@ -95,18 +156,18 @@ function Findings({ data, open, onChange }: { data: EngineTrendsResponse; open: 
             {findings.length} open finding{findings.length > 1 ? 's' : ''}{warn > 0 && <span className="text-destructive"> · {warn} warning{warn > 1 ? 's' : ''}</span>}
           </p>
           <ul className="divide-y">
-            {findings.map(f => <FindingRow key={f.key} f={f} run={byId.get(f.log_id)} open={open} onChange={onChange} />)}
+            {sorted(findings).map(f => <FindingRow key={f.key} f={f} run={byId.get(f.log_id)} open={open} onChange={onChange} />)}
           </ul>
         </div>
       )}
       {addressed.length > 0 && (
         <div>
           <button type="button" onClick={() => setShowAddressed(v => !v)} className="text-xs text-muted-foreground hover:text-foreground hover:underline">
-            {showAddressed ? 'Hide' : 'Show'} addressed ({addressed.length})
+            {showAddressed ? 'Hide' : 'Show'} reviewed ({addressed.length})
           </button>
           {showAddressed && (
             <ul className="mt-2 divide-y rounded-lg border">
-              {addressed.map(f => <FindingRow key={f.key} f={f} run={byId.get(f.log_id)} open={open} onChange={onChange} />)}
+              {sorted(addressed).map(f => <FindingRow key={f.key} f={f} run={byId.get(f.log_id)} open={open} onChange={onChange} />)}
             </ul>
           )}
         </div>
@@ -208,7 +269,7 @@ export function EngineTrends() {
               <tr key={r.id} onClick={() => openRun(r)} className={cn('cursor-pointer hover:bg-accent/40', flagged.has(r.id) && 'bg-amber-500/10')}>
                 <td className="whitespace-nowrap px-2 py-1.5">
                   {flagged.has(r.id) && <AlertTriangle className="mr-1 inline h-3 w-3 text-amber-500" />}
-                  {flaggedAddressed.has(r.id) && <span title="Finding addressed"><AlertTriangle className="mr-1 inline h-3 w-3 text-muted-foreground" /></span>}
+                  {flaggedAddressed.has(r.id) && <span title="Finding reviewed"><AlertTriangle className="mr-1 inline h-3 w-3 text-muted-foreground" /></span>}
                   {shortDate(r.started_at)}
                 </td>
                 <td className="whitespace-nowrap px-2 py-1.5">{r.origin ?? '?'}→{r.destination ?? '?'}{r.pilot_name && <span className="text-muted-foreground"> · {r.pilot_name.split(' ')[0]}</span>}</td>

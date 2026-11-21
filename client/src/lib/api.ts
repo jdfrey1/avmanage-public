@@ -328,6 +328,7 @@ export interface CurrencyStatus {
   nightLanding: { current: boolean; expiresDate: string | null; expiresInDays: number }
   medical:      { current: boolean; expiresDate: string | null; daysUntilExpiry: number | null }
   bfr:          { current: boolean; accomplishedDate: string | null; expiresDate: string | null; daysUntilExpiry: number | null }
+  icing?:       { current: boolean; accomplishedDate: string | null; expiresDate: string | null; daysUntilExpiry: number | null }
   lastImportAt:   string | null
   lastImportFile: string | null
   pilot: string

@@ -83,6 +83,9 @@ export function Settings() {
   const [bfrDate, setBfrDate]     = useState('')
   const [bfrSaving, setBfrSaving] = useState(false)
   const [bfrSaved, setBfrSaved]   = useState(false)
+  const [icingDate, setIcingDate] = useState('')
+  const [icingSaving, setIcingSaving] = useState(false)
+  const [icingSaved, setIcingSaved] = useState(false)
 
   // Account (name/email)
   const [accountName, setAccountName]     = useState('')
@@ -141,6 +144,7 @@ export function Settings() {
         setLastImportFile(c.lastImportFile ?? null)
         setMedicalExpiry(c.medical?.expiresDate ?? '')
         setBfrDate(c.bfr?.accomplishedDate ?? '')
+        setIcingDate(c.icing?.accomplishedDate ?? '')
       })
       .catch(() => {})
 
@@ -271,6 +275,20 @@ export function Settings() {
     }
   }
 
+  async function saveIcing() {
+    setIcingSaving(true)
+    setIcingSaved(false)
+    try {
+      await api.patch('/currency/icing', { icing_course_date: icingDate || null })
+      setIcingSaved(true)
+      setTimeout(() => setIcingSaved(false), 2000)
+    } catch {
+      setError('Failed to save icing course date')
+    } finally {
+      setIcingSaving(false)
+    }
+  }
+
   if (loading) return <div className="p-4 text-sm text-muted-foreground">Loading…</div>
 
 
@@ -381,6 +399,19 @@ export function Settings() {
               </div>
               <Button size="sm" variant="outline" disabled={bfrSaving} onClick={saveBfr}>
                 {bfrSaved ? 'Saved!' : bfrSaving ? 'Saving…' : 'Save BFR'}
+              </Button>
+            </div>
+
+            {/* Icing course (FIKI) */}
+            <div className="space-y-3 border-t pt-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Icing course</p>
+              <div className="space-y-1.5">
+                <Label>Date Completed</Label>
+                <Input type="date" value={icingDate} onChange={e => setIcingDate(e.target.value)} />
+                <p className="text-xs text-muted-foreground">Cirrus icing awareness course, required for flight into known icing. Good through the end of the 24th month.</p>
+              </div>
+              <Button size="sm" variant="outline" disabled={icingSaving} onClick={saveIcing}>
+                {icingSaved ? 'Saved!' : icingSaving ? 'Saving…' : 'Save Icing Course'}
               </Button>
             </div>
 

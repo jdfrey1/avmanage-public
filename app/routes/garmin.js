@@ -103,10 +103,17 @@ router.post('/findings/ack', async (req, res) => {
     const { partnership_id } = await getMembership(req.session.userId);
     const key = String(req.body.key || '').slice(0, 300);
     if (!key) return res.status(400).json({ error: 'key is required' });
+    const note = (req.body.note || '').trim().slice(0, 500) || null;
+    if (req.body.edit) {
+      // Editing the note of a reviewed finding keeps who reviewed it and when (a trend's
+      // "comes back after 5 more flights" window is measured from that date).
+      await pool.query('UPDATE engine_finding_acks SET note = $3 WHERE partnership_id = $1 AND finding_key = $2', [partnership_id, key, note]);
+      return res.json({ ok: true });
+    }
     await pool.query(
       `INSERT INTO engine_finding_acks (partnership_id, finding_key, note, acked_by) VALUES ($1, $2, $3, $4)
        ON CONFLICT (partnership_id, finding_key) DO UPDATE SET note = EXCLUDED.note, acked_by = EXCLUDED.acked_by, acked_at = NOW()`,
-      [partnership_id, key, (req.body.note || '').trim().slice(0, 500) || null, req.session.userId]);
+      [partnership_id, key, note, req.session.userId]);
     res.json({ ok: true });
   } catch (err) { fail(res, err, 'POST /garmin/findings/ack'); }
 });

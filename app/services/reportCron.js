@@ -115,6 +115,7 @@ async function checkCurrencyFor(pilot) {
     ['Night landing currency', status.nightLanding],
     ['Medical', status.medical],
     ['BFR', status.bfr],
+    ['Icing course', status.icing],
   ];
   const triggered = checks
     .map(([label, s]) => ({ label, days: s.expiresInDays ?? s.daysUntilExpiry, current: s.current }))
@@ -159,6 +160,7 @@ async function sendTestCurrencyAlert(userId, to) {
     ['Night landing currency', status.nightLanding],
     ['Medical', status.medical],
     ['BFR', status.bfr],
+    ['Icing course', status.icing],
   ];
   const current = checks
     .map(([label, s]) => ({ label, days: s.expiresInDays ?? s.daysUntilExpiry, current: s.current }))

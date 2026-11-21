@@ -93,7 +93,8 @@ async function getCurrencyStatus(userId) {
 
   const { rows: [u] } = await pool.query(
     `SELECT name, last_foreflight_import_at, last_foreflight_import_file,
-            medical_expires_date::text AS medical_expires_date, bfr_date::text AS bfr_date
+            medical_expires_date::text AS medical_expires_date, bfr_date::text AS bfr_date,
+            icing_course_date::text AS icing_course_date
      FROM users WHERE id = $1`,
     [userId]
   );
@@ -108,12 +109,19 @@ async function getCurrencyStatus(userId) {
   const bfrDaysUntilExpiry = bfrExpiresDate ? daysLeft(bfrExpiresDate, today) : null;
   const bfrCurrent = !!bfrExpiresDate && bfrExpiresDate >= today;
 
+  // Cirrus icing awareness course (needed for flight into known icing): every 24 calendar months.
+  const icingDate = u.icing_course_date ?? null;
+  const icingExpiresDate = icingDate ? endOfMonthAfter(icingDate, 24) : null;
+  const icingDaysUntilExpiry = icingExpiresDate ? daysLeft(icingExpiresDate, today) : null;
+  const icingCurrent = !!icingExpiresDate && icingExpiresDate >= today;
+
   return {
     ifr:          { current: ifrCurrent, expiresDate: ifrExpiry, expiresInDays: ifrExpiresInDays, approachesInWindow: totalApproaches, holdInWindow: !!lastHold, lastHoldDate: lastHold, ipcDate: lastIpc },
     dayLanding,
     nightLanding,
     medical:      { current: medicalCurrent, expiresDate: medicalDate, daysUntilExpiry: medicalDaysUntilExpiry },
     bfr:          { current: bfrCurrent, accomplishedDate: bfrDate, expiresDate: bfrExpiresDate, daysUntilExpiry: bfrDaysUntilExpiry },
+    icing:        { current: icingCurrent, accomplishedDate: icingDate, expiresDate: icingExpiresDate, daysUntilExpiry: icingDaysUntilExpiry },
     lastImportAt:   u.last_foreflight_import_at,
     lastImportFile: u.last_foreflight_import_file || null,
     pilot:          u.name,
@@ -545,6 +553,7 @@ async function buildMonthlyReportHtml(partnershipId) {
         ${currencyRow('Night landings (3 / 90 days)', currency.nightLanding)}
         ${currencyRow('Medical', currency.medical)}
         ${currencyRow('BFR', currency.bfr)}
+        ${currency.icing.accomplishedDate ? currencyRow('Icing course (FIKI)', currency.icing) : ''}
       </table>
       <p style="font-size:14px;margin:12px 0 0;">${hoursLine}</p>
       ${isOwner

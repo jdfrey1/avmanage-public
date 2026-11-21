@@ -79,7 +79,10 @@ async function scheduleSection(ctx, prefs) {
       : b.block_type === 'maintenance' ? 'Maintenance' : 'Unavailable';
     const title = b.title && b.title.toLowerCase() !== b.block_type ? ` — ${esc(b.title)}` : '';
     const label = `${when}: ${type}`;
-    items.push({ key, label, notable: true, endsAt: b.end_dt,
+    // who: whose booking it is, for the subject line (e.g. "Alex: 2 bookings", not "2 scheduled").
+    const who = b.block_type !== 'reservation' ? b.block_type
+      : b.pilot_id === ctx.userId ? 'you' : (b.pilot_name || 'Someone').split(' ')[0];
+    items.push({ key, label, who, notable: true, endsAt: b.end_dt,
       html: `<strong>${esc(when)}</strong> · ${esc(type)}${title}${b.notes ? `<br><span style="color:#666">${esc(b.notes)}</span>` : ''}` });
   }
   return { items, empty: `Nothing scheduled in the next ${prefs.lookahead_days} day${prefs.lookahead_days === 1 ? '' : 's'}.` };
@@ -133,11 +136,11 @@ async function maintenanceSection(ctx) {
 
 async function currencySection(ctx) {
   const s = await reports.getCurrencyStatus(ctx.userId);
-  const rows = [['IFR', s.ifr], ['Day landings', s.dayLanding], ['Night landings', s.nightLanding], ['Medical', s.medical], ['Flight review', s.bfr]];
+  const rows = [['IFR', s.ifr], ['Day landings', s.dayLanding], ['Night landings', s.nightLanding], ['Medical', s.medical], ['Flight review', s.bfr], ['Icing course', s.icing]];
   const items = [];
   for (const [label, st] of rows) {
     const days = st.expiresInDays ?? st.daysUntilExpiry;
-    const never = (label === 'Medical' && !st.expiresDate) || (label === 'Flight review' && !st.accomplishedDate);
+    const never = (label === 'Medical' && !st.expiresDate) || ((label === 'Flight review' || label === 'Icing course') && !st.accomplishedDate);
     if (never) continue;
     const state = !st.current ? 'lapsed' : days <= 30 ? 'soon' : 'ok';
     const text = !st.current ? 'Not current' : `Current · ${days} day${days === 1 ? '' : 's'} left`;
@@ -262,7 +265,16 @@ async function buildDigest(userId, prefs = null) {
 
   const counts = [];
   const sched = sections.find(s => s.id === 'schedule');
-  if (sched?.items.length) counts.push(`${sched.items.length} scheduled`);
+  if (sched?.items.length) {
+    // Say whose bookings they are, so a partner's reservations don't read as yours.
+    const by = new Map();
+    for (const i of sched.items) by.set(i.who, (by.get(i.who) || 0) + 1);
+    for (const [who, n] of by) {
+      const plural = n === 1 ? '' : 's';
+      counts.push(who === 'maintenance' ? `${n} maintenance` : who === 'unavailable' ? `${n} unavailable`
+        : who === 'you' ? `you: ${n} booking${plural}` : `${who}: ${n} booking${plural}`);
+    }
+  }
   const sq = sections.find(s => s.id === 'squawks');
   if (sq?.items.length) counts.push(`${sq.items.length} squawk${sq.items.length === 1 ? '' : 's'}`);
   const ins = sections.find(s => s.id === 'insights');
