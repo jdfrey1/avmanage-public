@@ -8,8 +8,9 @@ import { cn } from '@/lib/utils'
 import { useAuth } from '@/context/AuthContext'
 import { setPendingPhoto } from '@/lib/pendingPhoto'
 import { DateTile } from '@/components/DateTile'
+import { useMemberColors } from '@/lib/memberColors'
 import { AircraftStatusBanner, useAircraftStatus } from '@/components/AircraftStatusBanner'
-import { api, type DashboardFinding, type Flight, type ScheduleBlock, type PartnershipMember, type LedgerEntry, type AnnualHoursSummary, type Squawk, type Partnership, type CurrencyStatus } from '@/lib/api'
+import { api, type DashboardFinding, type Flight, type ScheduleBlock, type PartnershipMember, type LedgerEntry, type AnnualHoursSummary, type Squawk, type Partnership, type CurrencyStatus, type MaintenanceInterval } from '@/lib/api'
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
@@ -61,6 +62,8 @@ export function Dashboard() {
   const [lastFlight, setLastFlight]       = useState<Flight | null>(null)
   const [upcoming, setUpcoming]           = useState<ScheduleBlock[]>([])
   const [upcomingMembers, setUpcomingMembers] = useState<PartnershipMember[]>([])
+  const colorOf = useMemberColors()
+  const [oil, setOil] = useState<{ target: number; limit: number } | null>(null)
   const [ledgerEntry, setLedgerEntry]     = useState<LedgerEntry | null>(null)
   const [annualHours, setAnnualHours]     = useState<AnnualHoursSummary | null>(null)
   const [hoursUserId, setHoursUserId] = useState<string | null>(null)
@@ -99,6 +102,13 @@ export function Dashboard() {
     const horizon = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
     api.get<ScheduleBlock[]>(`/schedule?start=${encodeURIComponent(now)}&end=${encodeURIComponent(horizon)}`)
       .then(blocks => setUpcoming(blocks.slice(0, 5)))
+      .catch(() => {})
+    // Oil change: hours left to the target (interval − warn, e.g. 25) and the limit (interval, e.g. 30).
+    api.get<{ items: MaintenanceInterval[] }>('/maintenance/intervals')
+      .then(({ items }) => {
+        const o = items.find(i => /oil change/i.test(i.title))
+        if (o?.hours_remaining != null) setOil({ target: +(o.hours_remaining - o.warn_hours).toFixed(1), limit: o.hours_remaining })
+      })
       .catch(() => {})
     api.get<PartnershipMember[]>('/schedule/members')
       .then(setUpcomingMembers)
@@ -215,6 +225,20 @@ export function Dashboard() {
                     <p className="text-[10px] text-muted-foreground">Flight</p>
                   </div>
                 )}
+                {oil && (
+                  <div className="sm:ml-auto sm:border-l sm:pl-3">
+                    <p className="text-base font-bold tabular-nums leading-tight sm:text-lg">
+                      <span className="text-amber-600 dark:text-amber-400" title="Hours to the 25-hour oil change target">
+                        {oil.target >= 0 ? oil.target.toFixed(1) : `−${(-oil.target).toFixed(1)}`}
+                      </span>
+                      <span className="mx-1 text-xs font-normal text-muted-foreground">/</span>
+                      <span className="text-red-600 dark:text-red-400" title="Hours to the 30-hour oil change limit">
+                        {oil.limit >= 0 ? oil.limit.toFixed(1) : `−${(-oil.limit).toFixed(1)}`}
+                      </span>
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">Oil due (25 / 30h)</p>
+                  </div>
+                )}
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">No flights</p>
@@ -298,10 +322,11 @@ export function Dashboard() {
                   <DateTile date={b.start_dt} />
                   <div className="flex-1 min-w-0">
                     <p className="truncate text-sm font-medium">{b.title}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {displayPilot(b, upcomingMembers)} · {formatBlockTime(b)}
-                    </p>
+                    <p className="text-xs text-muted-foreground">{formatBlockTime(b)}</p>
                   </div>
+                  <Badge className={cn('mt-0.5 shrink-0', colorOf(b.pilot_name ? null : (b.pilot_id ?? b.created_by)).pill)}>
+                    {displayPilot(b, upcomingMembers).split(' ')[0]}
+                  </Badge>
                 </li>
               ))}
             </ul>
