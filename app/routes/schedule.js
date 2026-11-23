@@ -58,11 +58,14 @@ async function getPartnershipId(userId) {
   return rows[0].partnership_id;
 }
 
-// Reservations carry the flights logged on their local day(s), counted per member charged, and whether
-// those days are over (so the page can flag reservations nobody logged a flight for).
+// Reservations carry the flights logged during them, counted per member charged, and whether their
+// days are over (so the page can flag reservations nobody logged a flight for). Flights only have a
+// date, so when several reservations share a day each flight goes to the one its FlightAware/Garmin
+// times fall in (most overlap, then nearest); with no times, the one booked for its pilot, then the earliest.
 const TZ = (process.env.APP_TIMEZONE || 'America/New_York').replace(/[^A-Za-z0-9_/+-]/g, '');
-const LOCAL_START = `(s.start_dt AT TIME ZONE '${TZ}')::date`;
-const LOCAL_END = `((s.end_dt - interval '1 second') AT TIME ZONE '${TZ}')::date`;
+const localStart = a => `(${a}.start_dt AT TIME ZONE '${TZ}')::date`;
+const localEnd = a => `((${a}.end_dt - interval '1 second') AT TIME ZONE '${TZ}')::date`;
+const LOCAL_END = localEnd('s');
 const SELECT_BLOCK = `
   SELECT
     s.id, s.block_type, s.start_dt, s.end_dt, s.title, s.notes,
@@ -75,9 +78,28 @@ const SELECT_BLOCK = `
       SELECT json_agg(json_build_object('pilot', p.pilot, 'count', p.n) ORDER BY p.n DESC, p.pilot)
       FROM (
         SELECT fu.name AS pilot, COUNT(*)::int AS n
-        FROM flights f JOIN users fu ON fu.id = f.pilot_id
+        FROM flights f
+        JOIN users fu ON fu.id = f.pilot_id
+        CROSS JOIN LATERAL (
+          SELECT LEAST(
+                   (SELECT MIN(off_time) FROM flightaware_flights WHERE flight_id = f.id AND NOT ignored),
+                   (SELECT MIN(started_at) FROM garmin_data_logs WHERE flight_id = f.id)) AS t0,
+                 GREATEST(
+                   (SELECT MAX(on_time) FROM flightaware_flights WHERE flight_id = f.id AND NOT ignored),
+                   (SELECT MAX(ended_at) FROM garmin_data_logs WHERE flight_id = f.id)) AS t1
+        ) ft
         WHERE f.partnership_id = s.partnership_id
-          AND f.flight_date BETWEEN ${LOCAL_START} AND ${LOCAL_END}
+          AND f.flight_date BETWEEN ${localStart('s')} AND ${LOCAL_END}
+          AND s.id = (
+            SELECT r.id FROM schedule_blocks r
+            WHERE r.partnership_id = f.partnership_id AND r.block_type = 'reservation'
+              AND f.flight_date BETWEEN ${localStart('r')} AND ${localEnd('r')}
+            ORDER BY
+              GREATEST(EXTRACT(EPOCH FROM LEAST(r.end_dt, ft.t1) - GREATEST(r.start_dt, ft.t0)), 0) DESC NULLS LAST,
+              GREATEST(EXTRACT(EPOCH FROM r.start_dt - ft.t1), EXTRACT(EPOCH FROM ft.t0 - r.end_dt), 0) ASC NULLS LAST,
+              (r.pilot_id = f.pilot_id) DESC NULLS LAST,
+              r.start_dt, r.id
+            LIMIT 1)
         GROUP BY 1
       ) p
     ), '[]'::json) END AS flights_logged
