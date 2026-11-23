@@ -77,10 +77,10 @@ async function runBackup(type = 'manual', maxBackups = null) {
   const settings = readSettings();
   const limit = maxBackups ?? settings.maxBackups ?? 10;
 
+  // Local time (YYYY-MM-DD_HHMMSS), matching the schedule and the times shown in the app.
   const timestamp = new Date()
-    .toISOString()
-    .replace(/[-:T]/g, (m) => ({ '-': '-', ':': '', 'T': '_' }[m]))
-    .replace(/\.\d+Z$/, '');
+    .toLocaleString('sv-SE', { timeZone: process.env.APP_TIMEZONE || 'America/New_York', hour12: false })
+    .replace(' ', '_').replace(/:/g, '');
   const filename = `sr22_${type}_${timestamp}.sql.gz`;
   const filepath = path.join(BACKUP_DIR, filename);
   const tmpPath = filepath + '.tmp';

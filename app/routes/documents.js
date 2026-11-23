@@ -101,8 +101,8 @@ router.post('/upload', upload.single('file'), async (req, res) => {
         const driveName = doc.title.toLowerCase().endsWith(`.${ext}`) ? doc.title : `${doc.title}.${ext}`;
         // The Miscellaneous section has its own Drive folder (it holds non-aircraft paperwork
         // such as pilot training records); everything else goes to Aircraft Documents.
-        const folderKey = doc_type === 'miscellaneous' ? 'misc' : 'documents';
-        if (folderKey === 'misc') await googleDrive.ensureFolderStructure(); // adds the folder on older installs
+        const folderKey = doc_type === 'miscellaneous' ? 'misc' : doc_type === 'operating_limitations' ? 'poh' : 'documents';
+        if (folderKey !== 'documents') await googleDrive.ensureFolderStructure(); // adds the folder on older installs
         const driveFileId = await googleDrive.uploadFile(folderKey, {
           name: driveName, mimeType: mime, buffer: req.file.buffer,
         });

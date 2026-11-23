@@ -38,7 +38,7 @@ function _applySettings(settings) {
     } catch (err) {
       console.error('[backup-cron] Scheduled backup failed:', err.message);
     }
-  });
+  }, { timezone: process.env.APP_TIMEZONE || 'America/New_York' }); // the schedule is set in local time, not the server's UTC
 
   console.log(`[backup-cron] Cron scheduled: ${settings.cron}`);
 }

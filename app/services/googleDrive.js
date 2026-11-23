@@ -18,6 +18,7 @@ const FOLDER_NAMES = {
   garminLogs: 'Garmin Data Logs',
   backups: 'Database Backups',
   misc: 'Miscellaneous', // paperwork not specific to the aircraft (training records etc.)
+  branding: 'App Branding', // the uploaded aircraft image (home-screen icons are made from it)
 };
 
 // Folders nested inside one of the top-level folders above: key -> [name, parent key].
@@ -25,6 +26,7 @@ const FOLDER_NAMES = {
 const SUBFOLDERS = {
   oilAnalysis: ['Oil Analysis', 'maintenance'],
   databases: ['Databases', 'maintenance'],
+  poh: ['POH-AFM', 'documents'], // the POH/AFM and its Section 9 supplements
 };
 
 async function getDriveClient() {

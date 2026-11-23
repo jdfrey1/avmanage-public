@@ -20,6 +20,21 @@ function saveBrandingMark(buffer, mimetype) {
   fs.mkdirSync(BRANDING_DIR, { recursive: true });
   clearBrandingMark();
   fs.writeFileSync(path.join(BRANDING_DIR, `mark.${ext}`), buffer);
+  archiveToDrive(`mark.${ext}`, mimetype, buffer);
+}
+
+// Keeps a copy of the aircraft image in the Drive "App Branding" folder (it isn't in the database
+// backups). Best effort: the upload itself has already succeeded on local disk.
+function archiveToDrive(name, mimeType, buffer) {
+  const googleAuth = require('./googleAuth');
+  const googleDrive = require('./googleDrive');
+  googleAuth.isConnected().then(async (connected) => {
+    if (!connected) return;
+    await googleDrive.ensureFolderStructure();
+    const existing = await googleDrive.findFileId('branding', name);
+    if (existing) await googleDrive.updateFileContent(existing, { mimeType, buffer });
+    else await googleDrive.uploadFile('branding', { name, mimeType, buffer });
+  }).catch(err => console.error('Branding Drive copy failed:', err.message));
 }
 
 function clearBrandingMark() {

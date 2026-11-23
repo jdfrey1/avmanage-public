@@ -36,7 +36,7 @@ function _applySettings(settings) {
         console.log('[report-cron] Monthly report starting');
         try { await runMonthlyReport(); console.log('[report-cron] Monthly report sent'); }
         catch (err) { console.error('[report-cron] Monthly report failed:', err.message); }
-      });
+      }, { timezone: process.env.APP_TIMEZONE || 'America/New_York' }); // local time, not the server's UTC
       console.log(`[report-cron] Monthly report scheduled: ${settings.monthlyCron}`);
     }
   }

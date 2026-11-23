@@ -85,7 +85,7 @@ async function runDaily() {
 
 function initCron() {
   runDaily(); // catch up after a restart
-  cron.schedule('10 0 * * *', runDaily);
+  cron.schedule('10 0 * * *', runDaily, { timezone: process.env.APP_TIMEZONE || 'America/New_York' }); // just after local midnight
 }
 
 // Fire-and-forget hook for routes that change flights.
